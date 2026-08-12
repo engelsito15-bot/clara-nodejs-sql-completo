@@ -7,25 +7,30 @@ function normalizeNumber(value) {
   return Number(value || 0);
 }
 
-export async function getFinanceData(database) {
+export async function getFinanceData(database, userId) {
   const month = monthKey();
   const accounts = await database.all(
     `SELECT id, name, kind, balance, color
      FROM accounts
+     WHERE user_id = ?
      ORDER BY CASE kind WHEN 'bank' THEN 1 WHEN 'savings' THEN 2 ELSE 3 END, created_at`,
+    [userId],
   );
 
   const categories = await database.all(
-    `SELECT c.id, c.name, c.symbol, c.monthly_limit AS monthlyLimit, c.color,
+    `SELECT c.id, c.name, c.symbol,
+      COALESCE(b.monthly_limit, 0) AS monthlyLimit,
+      c.color,
       COALESCE(SUM(CASE
         WHEN t.type = 'expense' AND substr(t.transaction_date, 1, 7) = ? THEN t.amount
         ELSE 0
       END), 0) AS spent
      FROM categories c
-     LEFT JOIN transactions t ON t.category_id = c.id
-     GROUP BY c.id, c.name, c.symbol, c.monthly_limit, c.color, c.created_at
+     LEFT JOIN budgets b ON b.category_id = c.id AND b.user_id = ?
+     LEFT JOIN transactions t ON t.category_id = c.id AND t.user_id = ?
+     GROUP BY c.id, c.name, c.symbol, b.monthly_limit, c.color, c.created_at
      ORDER BY c.created_at`,
-    [month],
+    [month, userId, userId],
   );
 
   const transactions = await database.all(
@@ -41,18 +46,22 @@ export async function getFinanceData(database) {
       c.symbol AS categorySymbol,
       c.color AS categoryColor
      FROM transactions t
-     JOIN accounts a ON a.id = t.account_id
-     LEFT JOIN accounts destination ON destination.id = t.destination_account_id
+     JOIN accounts a ON a.id = t.account_id AND a.user_id = t.user_id
+     LEFT JOIN accounts destination ON destination.id = t.destination_account_id AND destination.user_id = t.user_id
      LEFT JOIN categories c ON c.id = t.category_id
+     WHERE t.user_id = ?
      ORDER BY t.transaction_date DESC, t.created_at DESC, t.id DESC
      LIMIT 150`,
+    [userId],
   );
 
   const goals = await database.all(
     `SELECT id, name, target_amount AS targetAmount,
       current_amount AS currentAmount, due_date AS dueDate, color
      FROM goals
+     WHERE user_id = ?
      ORDER BY created_at`,
+    [userId],
   );
 
   const normalizedAccounts = accounts.map((account) => ({
@@ -92,8 +101,8 @@ export async function getFinanceData(database) {
       COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS monthlyIncome,
       COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS monthlyExpenses
      FROM transactions
-     WHERE substr(transaction_date, 1, 7) = ?`,
-    [month],
+     WHERE user_id = ? AND substr(transaction_date, 1, 7) = ?`,
+    [userId, month],
   );
   const budgetTotal = normalizedCategories.reduce((sum, category) => sum + category.monthlyLimit, 0);
   const budgetSpent = normalizedCategories.reduce((sum, category) => sum + category.spent, 0);

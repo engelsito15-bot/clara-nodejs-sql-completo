@@ -10,7 +10,7 @@ import {
   loginUser,
   logoutUser,
   requireAuth,
-  setupFirstUser,
+  registerUser,
   updateCurrency,
 } from "./auth.js";
 import { createDatabase, runInTransaction } from "./database.js";
@@ -41,11 +41,11 @@ function validDate(value) {
   return new Date().toISOString().slice(0, 10);
 }
 
-async function accountById(database, id) {
-  return database.get("SELECT id, name, balance FROM accounts WHERE id = ?", [id]);
+async function accountById(database, id, userId) {
+  return database.get("SELECT id, name, balance FROM accounts WHERE id = ? AND user_id = ?", [id, userId]);
 }
 
-async function createTransaction(database, payload) {
+async function createTransaction(database, userId, payload) {
   const type = payload.type === "income" ? "income" : "expense";
   const amount = amountInCents(payload.amount);
   const accountId = integerId(payload.accountId);
@@ -56,7 +56,7 @@ async function createTransaction(database, payload) {
   if (type === "expense" && !categoryId) throw requestError("Selecciona una categoría para el gasto.");
 
   await runInTransaction(database, async (transaction) => {
-    const account = await accountById(transaction, accountId);
+    const account = await accountById(transaction, accountId, userId);
     if (!account) throw requestError("La cuenta seleccionada no existe.", 404);
     if (type === "expense" && Number(account.balance) < amount) {
       throw requestError("La cuenta no tiene saldo suficiente.");
@@ -66,9 +66,10 @@ async function createTransaction(database, payload) {
     await transaction.run("UPDATE accounts SET balance = balance + ? WHERE id = ?", [difference, accountId]);
     await transaction.run(
       `INSERT INTO transactions
-        (type, description, amount, account_id, category_id, transaction_date, note)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        (user_id, type, description, amount, account_id, category_id, transaction_date, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
+        userId,
         type,
         description,
         amount,
@@ -81,7 +82,7 @@ async function createTransaction(database, payload) {
   });
 }
 
-async function createTransfer(database, payload) {
+async function createTransfer(database, userId, payload) {
   const amount = amountInCents(payload.amount);
   const sourceId = integerId(payload.accountId);
   const destinationId = integerId(payload.destinationAccountId);
@@ -90,8 +91,8 @@ async function createTransfer(database, payload) {
   }
 
   await runInTransaction(database, async (transaction) => {
-    const source = await accountById(transaction, sourceId);
-    const destination = await accountById(transaction, destinationId);
+    const source = await accountById(transaction, sourceId, userId);
+    const destination = await accountById(transaction, destinationId, userId);
     if (!source || !destination) throw requestError("Una de las cuentas no existe.", 404);
     if (Number(source.balance) < amount) throw requestError("La cuenta de origen no tiene saldo suficiente.");
 
@@ -99,9 +100,10 @@ async function createTransfer(database, payload) {
     await transaction.run("UPDATE accounts SET balance = balance + ? WHERE id = ?", [amount, destinationId]);
     await transaction.run(
       `INSERT INTO transactions
-        (type, description, amount, account_id, destination_account_id, transaction_date, note)
-       VALUES ('transfer', ?, ?, ?, ?, ?, ?)`,
+        (user_id, type, description, amount, account_id, destination_account_id, transaction_date, note)
+       VALUES (?, 'transfer', ?, ?, ?, ?, ?, ?)`,
       [
+        userId,
         `Transferencia a ${destination.name}`,
         amount,
         sourceId,
@@ -113,25 +115,31 @@ async function createTransfer(database, payload) {
   });
 }
 
-async function updateBudget(database, payload) {
+async function updateBudget(database, userId, payload) {
   const categoryId = integerId(payload.categoryId);
   const monthlyLimit = amountInCents(payload.monthlyLimit, true);
   if (!categoryId || monthlyLimit === null) throw requestError("Ingresa un presupuesto válido.");
-  const result = await database.run("UPDATE categories SET monthly_limit = ? WHERE id = ?", [monthlyLimit, categoryId]);
-  if (!result.changes) throw requestError("La categoría no existe.", 404);
+  const category = await database.get("SELECT id FROM categories WHERE id = ?", [categoryId]);
+  if (!category) throw requestError("La categoría no existe.", 404);
+  const existing = await database.get("SELECT user_id FROM budgets WHERE user_id = ? AND category_id = ?", [userId, categoryId]);
+  if (existing) {
+    await database.run("UPDATE budgets SET monthly_limit = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND category_id = ?", [monthlyLimit, userId, categoryId]);
+  } else {
+    await database.run("INSERT INTO budgets (user_id, category_id, monthly_limit) VALUES (?, ?, ?)", [userId, categoryId, monthlyLimit]);
+  }
 }
 
-async function createGoal(database, payload) {
+async function createGoal(database, userId, payload) {
   const targetAmount = amountInCents(payload.targetAmount);
   const name = String(payload.name || "").trim();
   if (!targetAmount || !name || !payload.dueDate) throw requestError("Completa el nombre, el monto y la fecha de la meta.");
   await database.run(
-    "INSERT INTO goals (name, target_amount, current_amount, due_date, color) VALUES (?, ?, 0, ?, 'coral')",
-    [name, targetAmount, validDate(payload.dueDate)],
+    "INSERT INTO goals (user_id, name, target_amount, current_amount, due_date, color) VALUES (?, ?, ?, 0, ?, 'coral')",
+    [userId, name, targetAmount, validDate(payload.dueDate)],
   );
 }
 
-async function contributeToGoal(database, payload) {
+async function contributeToGoal(database, userId, payload) {
   const goalId = integerId(payload.goalId);
   const accountId = integerId(payload.accountId);
   const amount = amountInCents(payload.amount);
@@ -139,10 +147,10 @@ async function contributeToGoal(database, payload) {
 
   await runInTransaction(database, async (transaction) => {
     const goal = await transaction.get(
-      "SELECT id, name, target_amount AS targetAmount, current_amount AS currentAmount FROM goals WHERE id = ?",
-      [goalId],
+      "SELECT id, name, target_amount AS targetAmount, current_amount AS currentAmount FROM goals WHERE id = ? AND user_id = ?",
+      [goalId, userId],
     );
-    const account = await accountById(transaction, accountId);
+    const account = await accountById(transaction, accountId, userId);
     if (!goal || !account) throw requestError("La meta o la cuenta no existe.", 404);
     if (Number(account.balance) < amount) throw requestError("La cuenta no tiene saldo suficiente.");
     if (Number(goal.currentAmount) + amount > Number(goal.targetAmount)) {
@@ -153,29 +161,27 @@ async function contributeToGoal(database, payload) {
     await transaction.run("UPDATE goals SET current_amount = current_amount + ? WHERE id = ?", [amount, goalId]);
     await transaction.run(
       `INSERT INTO transactions
-        (type, description, amount, account_id, transaction_date, note)
-       VALUES ('expense', ?, ?, ?, ?, ?)`,
-      [`Aporte: ${goal.name}`, amount, accountId, validDate(), "Ahorro reservado para una meta"],
+        (user_id, type, description, amount, account_id, transaction_date, note)
+       VALUES (?, 'expense', ?, ?, ?, ?, ?)`,
+      [userId, `Aporte: ${goal.name}`, amount, accountId, validDate(), "Ahorro reservado para una meta"],
     );
   });
 }
 
-async function createAccount(database, payload) {
+async function createAccount(database, userId, payload) {
   const name = String(payload.name || "").trim();
   const balance = amountInCents(payload.amount ?? 0, true);
   const allowedKinds = new Set(["bank", "savings", "cash"]);
   const kind = allowedKinds.has(payload.kind) ? payload.kind : "bank";
   if (!name || balance === null) throw requestError("Ingresa un nombre y un saldo válido.");
-  await database.run("INSERT INTO accounts (name, kind, balance, color) VALUES (?, ?, ?, 'sky')", [name, kind, balance]);
+  await database.run("INSERT INTO accounts (user_id, name, kind, balance, color) VALUES (?, ?, ?, ?, 'sky')", [userId, name, kind, balance]);
 }
 
-function createLoginLimiter() {
+function createRequestLimiter({ windowMs, maxAttempts, keyForRequest, message }) {
   const attempts = new Map();
-  const windowMs = 15 * 60 * 1000;
-  const maxAttempts = 8;
   return (request, response, next) => {
     const now = Date.now();
-    const key = request.ip || request.socket.remoteAddress || "unknown";
+    const key = keyForRequest(request);
     const current = attempts.get(key);
     if (!current || now > current.resetAt) {
       attempts.set(key, { count: 1, resetAt: now + windowMs });
@@ -184,11 +190,33 @@ function createLoginLimiter() {
     }
     current.count += 1;
     if (current.count > maxAttempts) {
-      response.status(429).json({ error: "Demasiados intentos. Espera unos minutos antes de volver a intentar." });
+      response.status(429).json({ error: message });
       return;
     }
     next();
   };
+}
+
+function requestIp(request) {
+  return request.ip || request.socket.remoteAddress || "unknown";
+}
+
+function createLoginLimiter() {
+  return createRequestLimiter({
+    windowMs: 15 * 60 * 1000,
+    maxAttempts: 8,
+    keyForRequest: (request) => `${requestIp(request)}:${String(request.body?.username || "").trim().toLowerCase() || "anonymous"}`,
+    message: "Demasiados intentos para ese usuario. Espera unos minutos antes de volver a intentar.",
+  });
+}
+
+function createRegistrationLimiter() {
+  return createRequestLimiter({
+    windowMs: 60 * 60 * 1000,
+    maxAttempts: 10,
+    keyForRequest: (request) => requestIp(request),
+    message: "Se alcanzó el límite temporal de registros desde esta conexión. Intenta más tarde.",
+  });
 }
 
 export function createApp({ databasePath } = {}) {
@@ -196,6 +224,7 @@ export function createApp({ databasePath } = {}) {
   const database = createDatabase(databasePath);
   const protect = requireAuth(database);
   const limitLogin = createLoginLimiter();
+  const limitRegistration = createRegistrationLimiter();
   app.locals.database = database;
 
   const configuredOrigins = process.env.CORS_ORIGIN
@@ -215,15 +244,15 @@ export function createApp({ databasePath } = {}) {
 
   app.get("/api/auth/status", async (_request, response, next) => {
     try {
-      response.json(await authStatus(database));
+      response.json(await authStatus());
     } catch (error) {
       next(error);
     }
   });
 
-  app.post("/api/auth/setup", limitLogin, async (request, response, next) => {
+  app.post("/api/auth/register", limitRegistration, async (request, response, next) => {
     try {
-      response.status(201).json(await setupFirstUser(database, request.body || {}));
+      response.status(201).json(await registerUser(database, request.body || {}));
     } catch (error) {
       next(error);
     }
@@ -268,9 +297,9 @@ export function createApp({ databasePath } = {}) {
     }
   });
 
-  app.get("/api/finance", protect, async (_request, response, next) => {
+  app.get("/api/finance", protect, async (request, response, next) => {
     try {
-      response.json({ data: await getFinanceData(database) });
+      response.json({ data: await getFinanceData(database, request.auth.user.id) });
     } catch (error) {
       next(error);
     }
@@ -279,29 +308,30 @@ export function createApp({ databasePath } = {}) {
   app.post("/api/finance", protect, async (request, response, next) => {
     try {
       const payload = request.body || {};
+      const userId = request.auth.user.id;
       switch (payload.action) {
         case "transaction":
-          await createTransaction(database, payload);
+          await createTransaction(database, userId, payload);
           break;
         case "transfer":
-          await createTransfer(database, payload);
+          await createTransfer(database, userId, payload);
           break;
         case "budget":
-          await updateBudget(database, payload);
+          await updateBudget(database, userId, payload);
           break;
         case "goal":
-          await createGoal(database, payload);
+          await createGoal(database, userId, payload);
           break;
         case "goal-contribution":
-          await contributeToGoal(database, payload);
+          await contributeToGoal(database, userId, payload);
           break;
         case "account":
-          await createAccount(database, payload);
+          await createAccount(database, userId, payload);
           break;
         default:
           throw requestError("Operación no reconocida.");
       }
-      response.status(201).json({ data: await getFinanceData(database) });
+      response.status(201).json({ data: await getFinanceData(database, userId) });
     } catch (error) {
       next(error);
     }

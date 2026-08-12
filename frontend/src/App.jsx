@@ -160,20 +160,68 @@ async function apiRequest(path, options = {}, token = "") {
   return { response, result };
 }
 
+function sleep(milliseconds) {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+async function waitForBackend() {
+  let lastError = null;
+  for (let attempt = 1; attempt <= 10; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/health`, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (response.ok) return;
+      lastError = new Error("El servidor todavía no responde.");
+    } catch (error) {
+      lastError = error;
+    } finally {
+      window.clearTimeout(timeout);
+    }
+    if (attempt < 10) await sleep(2_500);
+  }
+  throw lastError || new Error("No se pudo iniciar el servidor de Clara.");
+}
+
 function LoadingScreen() {
+  const [seconds, setSeconds] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setSeconds((value) => value + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   return <div className="loading-screen">
-    <div className="loading-brand">
-      <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>
-      <strong>clara</strong>
+    <div className="loading-panel">
+      <img className="loading-gif" src="/clara-loading.gif" alt="Clara está cargando" />
+      <div className="loading-brand">
+        <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>
+        <strong>clara</strong>
+      </div>
+      <h1>{seconds < 8 ? "Preparando tu espacio…" : "Estamos iniciando el servidor…"}</h1>
+      <p>
+        {seconds < 8
+          ? "Conectando de forma segura con tus datos."
+          : "El servidor de Render puede tardar unos segundos en despertar cuando estuvo inactivo. No tienes que recargar la página."}
+      </p>
+      <span className="loading-line" aria-hidden="true" />
     </div>
-    <span className="loading-line" />
-    <p>Preparando tus finanzas…</p>
   </div>;
 }
 
-function AuthScreen({ setupRequired, setupCodeRequired, onAuthenticated }) {
+function AuthScreen({ registrationEnabled, onAuthenticated }) {
+  const [mode, setMode] = useState("login");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const isRegister = mode === "register";
+
+  function changeMode(nextMode) {
+    setMode(nextMode);
+    setError("");
+  }
 
   async function submit(event) {
     event.preventDefault();
@@ -182,7 +230,7 @@ function AuthScreen({ setupRequired, setupCodeRequired, onAuthenticated }) {
     const fields = new FormData(event.currentTarget);
     const payload = Object.fromEntries(fields.entries());
 
-    if (setupRequired && payload.password !== payload.confirmPassword) {
+    if (isRegister && payload.password !== payload.confirmPassword) {
       setError("Las contraseñas no coinciden.");
       setSaving(false);
       return;
@@ -190,17 +238,17 @@ function AuthScreen({ setupRequired, setupCodeRequired, onAuthenticated }) {
     delete payload.confirmPassword;
 
     try {
-      const endpoint = setupRequired ? "/api/auth/setup" : "/api/auth/login";
+      const endpoint = isRegister ? "/api/auth/register" : "/api/auth/login";
       const { response, result } = await apiRequest(endpoint, {
         method: "POST",
         body: JSON.stringify(payload),
       });
       if (!response.ok || !result?.token || !result?.user) {
-        throw new Error(result?.error || "No se pudo iniciar sesión.");
+        throw new Error(result?.error || (isRegister ? "No se pudo crear la cuenta." : "No se pudo iniciar sesión."));
       }
       onAuthenticated(result);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "No se pudo iniciar sesión.");
+      setError(requestError instanceof Error ? requestError.message : "No se pudo completar el acceso.");
     } finally {
       setSaving(false);
     }
@@ -215,52 +263,61 @@ function AuthScreen({ setupRequired, setupCodeRequired, onAuthenticated }) {
       <div className="auth-message">
         <p className="auth-kicker">Finanzas personales</p>
         <h1>Tu dinero, con más claridad.</h1>
-        <p>Organiza cuentas, presupuestos y metas en un espacio privado, sencillo y pensado para el día a día.</p>
+        <p>Cada persona tiene su propio perfil, sus cuentas, sus movimientos, sus metas y su moneda. Nada se mezcla entre usuarios.</p>
       </div>
       <div className="auth-points">
-        <span><i>01</i><strong>Saldos claros</strong><small>Todo en una sola vista.</small></span>
-        <span><i>02</i><strong>Metas reales</strong><small>Avances fáciles de seguir.</small></span>
-        <span><i>03</i><strong>Acceso protegido</strong><small>Tus datos requieren inicio de sesión.</small></span>
+        <span><i>01</i><strong>Perfil independiente</strong><small>Tus datos pertenecen solo a tu cuenta.</small></span>
+        <span><i>02</i><strong>Todo desde cero</strong><small>Cada perfil inicia con sus cuentas en 0.</small></span>
+        <span><i>03</i><strong>Acceso protegido</strong><small>La información requiere una sesión válida.</small></span>
       </div>
     </section>
 
     <section className="auth-form-area">
       <div className="auth-card">
-        <p className="eyebrow">{setupRequired ? "Primera configuración" : "Acceso seguro"}</p>
-        <h2>{setupRequired ? "Crea tu cuenta principal" : "Bienvenido de nuevo"}</h2>
+        {registrationEnabled && <div className="auth-switch" role="tablist" aria-label="Acceso a Clara">
+          <button type="button" className={mode === "login" ? "active" : ""} onClick={() => changeMode("login")}>Iniciar sesión</button>
+          <button type="button" className={mode === "register" ? "active" : ""} onClick={() => changeMode("register")}>Crear cuenta</button>
+        </div>}
+
+        <p className="eyebrow">{isRegister ? "Nuevo perfil" : "Acceso seguro"}</p>
+        <h2>{isRegister ? "Crea tu espacio personal" : "Bienvenido de nuevo"}</h2>
         <p className="auth-description">
-          {setupRequired
-            ? "Esta cuenta será la primera credencial para entrar a Clara."
-            : "Ingresa tus credenciales para continuar a tu panel."}
+          {isRegister
+            ? "Tu perfil se crea separado de todos los demás y comienza con sus saldos en cero."
+            : "Ingresa tus credenciales para continuar a tu panel personal."}
         </p>
 
         <form onSubmit={submit}>
-          {setupRequired && setupCodeRequired && <label>
-            <span>Código de configuración</span>
-            <input type="password" name="setupCode" required autoFocus placeholder="Código definido en Render" />
-          </label>}
-          {setupRequired && <label>
+          {isRegister && <label>
             <span>Nombre</span>
-            <input name="name" autoComplete="name" required autoFocus={!setupCodeRequired} placeholder="Ej. Engels García" />
+            <input name="name" autoComplete="name" required autoFocus placeholder="Ej. María Pérez" />
           </label>}
           <label>
             <span>Usuario</span>
-            <input name="username" autoComplete="username" required autoFocus={!setupRequired} placeholder="Ej. engels" />
+            <input name="username" autoComplete="username" required autoFocus={!isRegister} placeholder="Ej. maria.perez" />
           </label>
+          {isRegister && <label>
+            <span>Moneda principal</span>
+            <select name="currencyCode" defaultValue="DOP">
+              {currencyOptions.map((option) => <option key={option.code} value={option.code}>{option.label} ({option.symbol})</option>)}
+            </select>
+          </label>}
           <label>
             <span>Contraseña</span>
-            <input type="password" name="password" autoComplete={setupRequired ? "new-password" : "current-password"} minLength="8" required placeholder="Mínimo 8 caracteres" />
+            <input type="password" name="password" autoComplete={isRegister ? "new-password" : "current-password"} minLength="8" required placeholder="Mínimo 8 caracteres" />
           </label>
-          {setupRequired && <label>
+          {isRegister && <label>
             <span>Confirmar contraseña</span>
             <input type="password" name="confirmPassword" autoComplete="new-password" minLength="8" required placeholder="Repite la contraseña" />
           </label>}
           {error && <p className="form-error" role="alert">{error}</p>}
           <button className="primary-action auth-submit" type="submit" disabled={saving}>
-            {saving ? "Validando…" : setupRequired ? "Crear cuenta y entrar" : "Iniciar sesión"}
+            {saving ? "Procesando…" : isRegister ? "Crear mi cuenta" : "Iniciar sesión"}
           </button>
         </form>
-        <p className="auth-footnote">Clara no muestra información financiera sin una sesión válida.</p>
+        <p className="auth-footnote">
+          {isRegister ? "Tus cuentas iniciales se crean en 0 y solo serán visibles dentro de tu perfil." : "Clara no muestra información financiera sin una sesión válida."}
+        </p>
       </div>
     </section>
   </div>;
@@ -280,7 +337,7 @@ function SavingsApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
-  const [auth, setAuth] = useState({ checking: true, setupRequired: false, setupCodeRequired: false, user: null });
+  const [auth, setAuth] = useState({ checking: true, registrationEnabled: true, user: null });
 
   const currencyCode = auth.user?.currencyCode || "DOP";
   const moneyTools = useMemo(() => ({
@@ -320,22 +377,18 @@ function SavingsApp() {
     let active = true;
     async function bootstrap() {
       try {
+        await waitForBackend();
+        if (!active) return;
+
         const { response: statusResponse, result: status } = await apiRequest("/api/auth/status", { cache: "no-store" });
         if (!statusResponse.ok) throw new Error(status?.error || "No se pudo conectar con Clara.");
         if (!active) return;
 
-        if (status?.setupRequired) {
-          localStorage.removeItem(TOKEN_KEY);
-          setToken("");
-          setLoading(false);
-          setAuth({ checking: false, setupRequired: true, setupCodeRequired: Boolean(status?.setupCodeRequired), user: null });
-          return;
-        }
-
+        const registrationEnabled = status?.registrationEnabled !== false;
         const storedToken = localStorage.getItem(TOKEN_KEY) || "";
         if (!storedToken) {
           setLoading(false);
-          setAuth({ checking: false, setupRequired: false, setupCodeRequired: false, user: null });
+          setAuth({ checking: false, registrationEnabled, user: null });
           return;
         }
 
@@ -345,18 +398,18 @@ function SavingsApp() {
           localStorage.removeItem(TOKEN_KEY);
           setToken("");
           setLoading(false);
-          setAuth({ checking: false, setupRequired: false, setupCodeRequired: false, user: null });
+          setAuth({ checking: false, registrationEnabled, user: null });
           return;
         }
 
         setToken(storedToken);
-        setAuth({ checking: false, setupRequired: false, setupCodeRequired: false, user: meResult.user });
+        setAuth({ checking: false, registrationEnabled, user: meResult.user });
         await refresh(storedToken);
       } catch (requestError) {
         if (!active) return;
         setLoading(false);
         setError(requestError instanceof Error ? requestError.message : "No se pudo conectar con Clara.");
-        setAuth({ checking: false, setupRequired: false, setupCodeRequired: false, user: null });
+        setAuth({ checking: false, registrationEnabled: true, user: null });
       }
     }
     void bootstrap();
@@ -375,7 +428,7 @@ function SavingsApp() {
   function handleAuthenticated(session) {
     localStorage.setItem(TOKEN_KEY, session.token);
     setToken(session.token);
-    setAuth({ checking: false, setupRequired: false, setupCodeRequired: false, user: session.user });
+    setAuth((current) => ({ checking: false, registrationEnabled: current.registrationEnabled, user: session.user }));
     setError("");
     void refresh(session.token);
   }
@@ -464,7 +517,7 @@ function SavingsApp() {
   }
 
   if (auth.checking) return <LoadingScreen />;
-  if (!auth.user) return <AuthScreen setupRequired={auth.setupRequired} setupCodeRequired={auth.setupCodeRequired} onAuthenticated={handleAuthenticated} />;
+  if (!auth.user) return <AuthScreen registrationEnabled={auth.registrationEnabled} onAuthenticated={handleAuthenticated} />;
 
   return <MoneyContext.Provider value={moneyTools}>
     <div className="app-shell">

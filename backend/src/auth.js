@@ -5,6 +5,12 @@ const PASSWORD_BYTES = 64;
 
 export const SUPPORTED_CURRENCIES = new Set(["DOP", "USD", "EUR", "GBP", "MXN", "COP", "PEN", "BOB"]);
 
+const DEFAULT_ACCOUNTS = [
+  ["Cuenta principal", "bank", "forest"],
+  ["Ahorros", "savings", "mint"],
+  ["Efectivo", "cash", "sun"],
+];
+
 function requestError(message, status = 400) {
   const error = new Error(message);
   error.status = status;
@@ -17,6 +23,10 @@ function normalizeUsername(value) {
 
 function normalizeName(value) {
   return String(value || "").trim().replace(/\s+/g, " ");
+}
+
+function normalizeCurrency(value) {
+  return String(value || "DOP").trim().toUpperCase();
 }
 
 function tokenHash(token) {
@@ -57,26 +67,31 @@ async function createSession(database, userId) {
   return token;
 }
 
-export async function authStatus(database) {
-  const row = await database.get("SELECT COUNT(*) AS count FROM users");
+async function seedUserAccounts(database, userId) {
+  for (const [name, kind, color] of DEFAULT_ACCOUNTS) {
+    await database.run(
+      "INSERT INTO accounts (user_id, name, kind, balance, color) VALUES (?, ?, ?, 0, ?)",
+      [userId, name, kind, color],
+    );
+  }
+}
+
+export async function authStatus() {
   return {
-    setupRequired: Number(row?.count || 0) === 0,
-    setupCodeRequired: Boolean(process.env.INITIAL_SETUP_CODE),
+    registrationEnabled: process.env.REGISTRATION_ENABLED !== "false",
   };
 }
 
-export async function setupFirstUser(database, payload) {
-  const { setupRequired } = await authStatus(database);
-  if (!setupRequired) throw requestError("La cuenta principal ya fue configurada.", 409);
-
-  const setupCode = String(payload.setupCode || "");
-  if (process.env.INITIAL_SETUP_CODE && setupCode !== process.env.INITIAL_SETUP_CODE) {
-    throw requestError("El código de configuración inicial no es válido.", 401);
+export async function registerUser(database, payload) {
+  if (process.env.REGISTRATION_ENABLED === "false") {
+    throw requestError("El registro de nuevas cuentas está deshabilitado temporalmente.", 403);
   }
 
   const name = normalizeName(payload.name);
   const username = normalizeUsername(payload.username);
   const password = String(payload.password || "");
+  const requestedCurrency = normalizeCurrency(payload.currencyCode);
+  const currencyCode = SUPPORTED_CURRENCIES.has(requestedCurrency) ? requestedCurrency : "DOP";
 
   if (name.length < 2) throw requestError("Escribe tu nombre.");
   if (!/^[a-z0-9._-]{3,40}$/i.test(username)) {
@@ -84,18 +99,35 @@ export async function setupFirstUser(database, payload) {
   }
   if (password.length < 8) throw requestError("La contraseña debe tener al menos 8 caracteres.");
 
+  const existing = await database.get("SELECT id FROM users WHERE username = ?", [username]);
+  if (existing) throw requestError("Ese nombre de usuario ya está registrado.", 409);
+
   const salt = randomBytes(16).toString("hex");
   const hash = passwordDigest(password, salt).toString("hex");
-  const result = await database.run(
-    `INSERT INTO users (name, username, password_salt, password_hash, currency_code)
-     VALUES (?, ?, ?, ?, 'DOP')`,
-    [name, username, salt, hash],
-  );
+
+  let userId;
+  try {
+    await database.transaction(async (transaction) => {
+      const result = await transaction.run(
+        `INSERT INTO users (name, username, password_salt, password_hash, currency_code)
+         VALUES (?, ?, ?, ?, ?)`,
+        [name, username, salt, hash, currencyCode],
+      );
+      userId = result.insertId;
+      await seedUserAccounts(transaction, userId);
+    });
+  } catch (error) {
+    if (String(error?.message || "").toLocaleLowerCase("es").includes("unique")) {
+      throw requestError("Ese nombre de usuario ya está registrado.", 409);
+    }
+    throw error;
+  }
+
   const user = await database.get(
     "SELECT id, name, username, currency_code AS currencyCode FROM users WHERE id = ?",
-    [result.insertId],
+    [userId],
   );
-  const token = await createSession(database, result.insertId);
+  const token = await createSession(database, userId);
   return { token, user: publicUser(user) };
 }
 
@@ -160,7 +192,7 @@ export async function logoutUser(database, token) {
 }
 
 export async function updateCurrency(database, userId, currencyCode) {
-  const code = String(currencyCode || "").trim().toUpperCase();
+  const code = normalizeCurrency(currencyCode);
   if (!SUPPORTED_CURRENCIES.has(code)) throw requestError("Selecciona una moneda válida.");
   await database.run("UPDATE users SET currency_code = ? WHERE id = ?", [code, userId]);
   const user = await database.get(

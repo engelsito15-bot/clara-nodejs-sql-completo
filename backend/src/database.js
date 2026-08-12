@@ -10,49 +10,81 @@ const defaultDatabasePath = join(currentDirectory, "..", "data", "clara.sqlite")
 const sqliteSchemaPath = join(currentDirectory, "db", "schema.sql");
 const tidbSchemaPath = join(currentDirectory, "db", "schema.tidb.sql");
 
-const baseAccounts = [
-  [1, "Cuenta principal", "bank", 0, "forest"],
-  [2, "Ahorros", "savings", 0, "mint"],
-  [3, "Efectivo", "cash", 0, "sun"],
-];
-
 const baseCategories = [
-  [1, "Vivienda", "VI", 0, "forest"],
-  [2, "Alimentación", "AL", 0, "coral"],
-  [3, "Transporte", "TR", 0, "sky"],
-  [4, "Bienestar", "BI", 0, "lilac"],
-  [5, "Ocio", "OC", 0, "sun"],
-  [6, "Educación", "ED", 0, "mint"],
+  [1, "Vivienda", "VI", "forest"],
+  [2, "Alimentación", "AL", "coral"],
+  [3, "Transporte", "TR", "sky"],
+  [4, "Bienestar", "BI", "lilac"],
+  [5, "Ocio", "OC", "sun"],
+  [6, "Educación", "ED", "mint"],
 ];
 
-function seedSqliteDatabase(database) {
-  const seed = database.prepare("SELECT value FROM app_meta WHERE key = ?").get("base_seed_v2");
-  if (seed) return;
+const defaultAccounts = [
+  ["Cuenta principal", "bank", "forest"],
+  ["Ahorros", "savings", "mint"],
+  ["Efectivo", "cash", "sun"],
+];
 
-  const accountCount = Number(database.prepare("SELECT COUNT(*) AS count FROM accounts").get().count || 0);
+function sqliteColumnExists(database, table, column) {
+  return database.prepare(`PRAGMA table_info(${table})`).all().some((row) => row.name === column);
+}
+
+function ensureSqliteMultiUserSchema(database) {
+  if (!sqliteColumnExists(database, "accounts", "user_id")) {
+    database.exec("ALTER TABLE accounts ADD COLUMN user_id INTEGER");
+  }
+  if (!sqliteColumnExists(database, "transactions", "user_id")) {
+    database.exec("ALTER TABLE transactions ADD COLUMN user_id INTEGER");
+  }
+  if (!sqliteColumnExists(database, "goals", "user_id")) {
+    database.exec("ALTER TABLE goals ADD COLUMN user_id INTEGER");
+  }
+
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS budgets (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+      monthly_limit INTEGER NOT NULL DEFAULT 0 CHECK (monthly_limit >= 0),
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, category_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_accounts_user ON accounts(user_id);
+    CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, transaction_date);
+    CREATE INDEX IF NOT EXISTS idx_goals_user_due_date ON goals(user_id, due_date);
+    CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets(user_id);
+  `);
+}
+
+function seedSqliteCategories(database) {
   const categoryCount = Number(database.prepare("SELECT COUNT(*) AS count FROM categories").get().count || 0);
+  if (categoryCount) return;
+
+  const columns = database.prepare("PRAGMA table_info(categories)").all().map((row) => row.name);
+  const hasLegacyLimit = columns.includes("monthly_limit");
+  const insertCategory = hasLegacyLimit
+    ? database.prepare("INSERT INTO categories (id, name, symbol, monthly_limit, color) VALUES (?, ?, ?, 0, ?)")
+    : database.prepare("INSERT INTO categories (id, name, symbol, color) VALUES (?, ?, ?, ?)");
 
   database.exec("BEGIN IMMEDIATE");
   try {
-    if (!accountCount) {
-      const insertAccount = database.prepare(
-        "INSERT INTO accounts (id, name, kind, balance, color) VALUES (?, ?, ?, ?, ?)",
-      );
-      baseAccounts.forEach((row) => insertAccount.run(...row));
-    }
-
-    if (!categoryCount) {
-      const insertCategory = database.prepare(
-        "INSERT INTO categories (id, name, symbol, monthly_limit, color) VALUES (?, ?, ?, ?, ?)",
-      );
-      baseCategories.forEach((row) => insertCategory.run(...row));
-    }
-
-    database.prepare("INSERT OR REPLACE INTO app_meta (key, value) VALUES (?, ?)").run("base_seed_v2", "1");
+    baseCategories.forEach((row) => insertCategory.run(...row));
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");
     throw error;
+  }
+}
+
+function ensureSqliteUserAccounts(database) {
+  const users = database.prepare("SELECT id FROM users ORDER BY id").all();
+  const countAccounts = database.prepare("SELECT COUNT(*) AS count FROM accounts WHERE user_id = ?");
+  const insertAccount = database.prepare(
+    "INSERT INTO accounts (user_id, name, kind, balance, color) VALUES (?, ?, ?, 0, ?)",
+  );
+
+  for (const user of users) {
+    if (Number(countAccounts.get(user.id).count || 0) > 0) continue;
+    for (const [name, kind, color] of defaultAccounts) insertAccount.run(user.id, name, kind, color);
   }
 }
 
@@ -63,7 +95,9 @@ class SqliteDatabase {
     if (databasePath !== ":memory:") mkdirSync(dirname(databasePath), { recursive: true });
     this.database = new DatabaseSync(databasePath);
     this.database.exec(readFileSync(sqliteSchemaPath, "utf8"));
-    seedSqliteDatabase(this.database);
+    ensureSqliteMultiUserSchema(this.database);
+    seedSqliteCategories(this.database);
+    ensureSqliteUserAccounts(this.database);
     this.database.exec("PRAGMA optimize");
   }
 
@@ -126,41 +160,78 @@ function splitSqlStatements(sql) {
   return sql.split(";").map((statement) => statement.trim()).filter(Boolean);
 }
 
-async function seedTidbDatabase(connection) {
-  const [seedRows] = await connection.execute("SELECT value FROM app_meta WHERE `key` = ?", ["base_seed_v2"]);
-  if (seedRows.length) return;
+async function tidbColumnExists(connection, table, column) {
+  const [rows] = await connection.execute(
+    `SELECT COUNT(*) AS count
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+    [table, column],
+  );
+  return Number(rows[0]?.count || 0) > 0;
+}
 
-  const [[accountCountRow]] = await connection.query("SELECT COUNT(*) AS count FROM accounts");
+async function ensureTidbMultiUserSchema(connection) {
+  if (!(await tidbColumnExists(connection, "accounts", "user_id"))) {
+    await connection.query("ALTER TABLE accounts ADD COLUMN user_id BIGINT NULL");
+  }
+  if (!(await tidbColumnExists(connection, "transactions", "user_id"))) {
+    await connection.query("ALTER TABLE transactions ADD COLUMN user_id BIGINT NULL");
+  }
+  if (!(await tidbColumnExists(connection, "goals", "user_id"))) {
+    await connection.query("ALTER TABLE goals ADD COLUMN user_id BIGINT NULL");
+  }
+
+  await connection.query(`CREATE TABLE IF NOT EXISTS budgets (
+    user_id BIGINT NOT NULL,
+    category_id BIGINT NOT NULL,
+    monthly_limit BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, category_id),
+    CONSTRAINT chk_budgets_limit CHECK (monthly_limit >= 0),
+    CONSTRAINT fk_budgets_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_budgets_category FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
+  )`);
+
+  const indexes = [
+    "CREATE INDEX IF NOT EXISTS idx_accounts_user ON accounts(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, transaction_date)",
+    "CREATE INDEX IF NOT EXISTS idx_goals_user_due_date ON goals(user_id, due_date)",
+    "CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets(user_id)",
+  ];
+  for (const statement of indexes) await connection.query(statement);
+}
+
+async function seedTidbCategories(connection) {
   const [[categoryCountRow]] = await connection.query("SELECT COUNT(*) AS count FROM categories");
+  if (Number(categoryCountRow.count || 0)) return;
 
-  await connection.beginTransaction();
-  try {
-    if (!Number(accountCountRow.count || 0)) {
-      for (const row of baseAccounts) {
-        await connection.execute(
-          "INSERT INTO accounts (id, name, kind, balance, color) VALUES (?, ?, ?, ?, ?)",
-          row,
-        );
-      }
+  const hasLegacyLimit = await tidbColumnExists(connection, "categories", "monthly_limit");
+  for (const [id, name, symbol, color] of baseCategories) {
+    if (hasLegacyLimit) {
+      await connection.execute(
+        "INSERT INTO categories (id, name, symbol, monthly_limit, color) VALUES (?, ?, ?, 0, ?)",
+        [id, name, symbol, color],
+      );
+    } else {
+      await connection.execute(
+        "INSERT INTO categories (id, name, symbol, color) VALUES (?, ?, ?, ?)",
+        [id, name, symbol, color],
+      );
     }
+  }
+}
 
-    if (!Number(categoryCountRow.count || 0)) {
-      for (const row of baseCategories) {
-        await connection.execute(
-          "INSERT INTO categories (id, name, symbol, monthly_limit, color) VALUES (?, ?, ?, ?, ?)",
-          row,
-        );
-      }
+async function ensureTidbUserAccounts(connection) {
+  const [users] = await connection.query("SELECT id FROM users ORDER BY id");
+  for (const user of users) {
+    const [[row]] = await connection.execute("SELECT COUNT(*) AS count FROM accounts WHERE user_id = ?", [user.id]);
+    if (Number(row.count || 0) > 0) continue;
+    for (const [name, kind, color] of defaultAccounts) {
+      await connection.execute(
+        "INSERT INTO accounts (user_id, name, kind, balance, color) VALUES (?, ?, ?, 0, ?)",
+        [user.id, name, kind, color],
+      );
     }
-
-    await connection.execute(
-      "INSERT INTO app_meta (`key`, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)",
-      ["base_seed_v2", "1"],
-    );
-    await connection.commit();
-  } catch (error) {
-    await connection.rollback();
-    throw error;
   }
 }
 
@@ -177,7 +248,9 @@ class TidbDatabase {
     try {
       const schema = readFileSync(tidbSchemaPath, "utf8");
       for (const statement of splitSqlStatements(schema)) await connection.query(statement);
-      if (process.env.SEED_BASE_DATA !== "false") await seedTidbDatabase(connection);
+      await ensureTidbMultiUserSchema(connection);
+      if (process.env.SEED_BASE_DATA !== "false") await seedTidbCategories(connection);
+      await ensureTidbUserAccounts(connection);
     } finally {
       connection.release();
     }
