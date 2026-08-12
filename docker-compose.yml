@@ -1,0 +1,14 @@
+services:
+  clara:
+    build: .
+    ports:
+      - "4000:4000"
+    environment:
+      PORT: 4000
+      DB_PATH: /app/backend/data/clara.sqlite
+    volumes:
+      - clara_data:/app/backend/data
+    restart: unless-stopped
+
+volumes:
+  clara_data:
