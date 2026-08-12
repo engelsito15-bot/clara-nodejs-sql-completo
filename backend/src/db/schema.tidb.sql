@@ -49,19 +49,32 @@ CREATE TABLE IF NOT EXISTS goals (
   CONSTRAINT chk_goals_current CHECK (current_amount >= 0)
 );
 
+CREATE TABLE IF NOT EXISTS users (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  name VARCHAR(120) NOT NULL,
+  username VARCHAR(40) NOT NULL UNIQUE,
+  password_salt VARCHAR(64) NOT NULL,
+  password_hash VARCHAR(256) NOT NULL,
+  currency_code VARCHAR(10) NOT NULL DEFAULT 'DOP',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token_hash CHAR(64) PRIMARY KEY,
+  user_id BIGINT NOT NULL,
+  expires_at DATETIME NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_sessions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS app_meta (
   `key` VARCHAR(100) PRIMARY KEY,
   value TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_transactions_date
-ON transactions(transaction_date);
-
-CREATE INDEX IF NOT EXISTS idx_transactions_account_date
-ON transactions(account_id, transaction_date);
-
-CREATE INDEX IF NOT EXISTS idx_transactions_category_date
-ON transactions(category_id, transaction_date);
-
-CREATE INDEX IF NOT EXISTS idx_goals_due_date
-ON goals(due_date);
+CREATE INDEX IF NOT EXISTS idx_transactions_date ON transactions(transaction_date);
+CREATE INDEX IF NOT EXISTS idx_transactions_account_date ON transactions(account_id, transaction_date);
+CREATE INDEX IF NOT EXISTS idx_transactions_category_date ON transactions(category_id, transaction_date);
+CREATE INDEX IF NOT EXISTS idx_goals_due_date ON goals(due_date);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expiration ON sessions(expires_at);

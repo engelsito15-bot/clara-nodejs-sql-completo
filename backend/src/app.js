@@ -3,6 +3,16 @@ import express from "express";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  authStatus,
+  authenticatedUser,
+  bearerToken,
+  loginUser,
+  logoutUser,
+  requireAuth,
+  setupFirstUser,
+  updateCurrency,
+} from "./auth.js";
 import { createDatabase, runInTransaction } from "./database.js";
 import { getFinanceData } from "./finance-data.js";
 
@@ -42,12 +52,8 @@ async function createTransaction(database, payload) {
   const categoryId = payload.categoryId ? integerId(payload.categoryId) : null;
   const description = String(payload.description || "").trim();
 
-  if (!amount || !accountId || !description) {
-    throw requestError("Completa la cuenta, el concepto y un monto válido.");
-  }
-  if (type === "expense" && !categoryId) {
-    throw requestError("Selecciona una categoría para el gasto.");
-  }
+  if (!amount || !accountId || !description) throw requestError("Completa la cuenta, el concepto y un monto válido.");
+  if (type === "expense" && !categoryId) throw requestError("Selecciona una categoría para el gasto.");
 
   await runInTransaction(database, async (transaction) => {
     const account = await accountById(transaction, accountId);
@@ -118,9 +124,7 @@ async function updateBudget(database, payload) {
 async function createGoal(database, payload) {
   const targetAmount = amountInCents(payload.targetAmount);
   const name = String(payload.name || "").trim();
-  if (!targetAmount || !name || !payload.dueDate) {
-    throw requestError("Completa el nombre, el monto y la fecha de la meta.");
-  }
+  if (!targetAmount || !name || !payload.dueDate) throw requestError("Completa el nombre, el monto y la fecha de la meta.");
   await database.run(
     "INSERT INTO goals (name, target_amount, current_amount, due_date, color) VALUES (?, ?, 0, ?, 'coral')",
     [name, targetAmount, validDate(payload.dueDate)],
@@ -165,9 +169,33 @@ async function createAccount(database, payload) {
   await database.run("INSERT INTO accounts (name, kind, balance, color) VALUES (?, ?, ?, 'sky')", [name, kind, balance]);
 }
 
+function createLoginLimiter() {
+  const attempts = new Map();
+  const windowMs = 15 * 60 * 1000;
+  const maxAttempts = 8;
+  return (request, response, next) => {
+    const now = Date.now();
+    const key = request.ip || request.socket.remoteAddress || "unknown";
+    const current = attempts.get(key);
+    if (!current || now > current.resetAt) {
+      attempts.set(key, { count: 1, resetAt: now + windowMs });
+      next();
+      return;
+    }
+    current.count += 1;
+    if (current.count > maxAttempts) {
+      response.status(429).json({ error: "Demasiados intentos. Espera unos minutos antes de volver a intentar." });
+      return;
+    }
+    next();
+  };
+}
+
 export function createApp({ databasePath } = {}) {
   const app = express();
   const database = createDatabase(databasePath);
+  const protect = requireAuth(database);
+  const limitLogin = createLoginLimiter();
   app.locals.database = database;
 
   const configuredOrigins = process.env.CORS_ORIGIN
@@ -185,7 +213,62 @@ export function createApp({ databasePath } = {}) {
     }
   });
 
-  app.get("/api/finance", async (_request, response, next) => {
+  app.get("/api/auth/status", async (_request, response, next) => {
+    try {
+      response.json(await authStatus(database));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/auth/setup", limitLogin, async (request, response, next) => {
+    try {
+      response.status(201).json(await setupFirstUser(database, request.body || {}));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/auth/login", limitLogin, async (request, response, next) => {
+    try {
+      response.json(await loginUser(database, request.body || {}));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/auth/me", async (request, response, next) => {
+    try {
+      const user = await authenticatedUser(database, bearerToken(request));
+      if (!user) {
+        response.status(401).json({ error: "Tu sesión venció o no has iniciado sesión." });
+        return;
+      }
+      response.json({ user });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/auth/logout", protect, async (request, response, next) => {
+    try {
+      await logoutUser(database, request.auth.token);
+      response.status(204).end();
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/settings", protect, async (request, response, next) => {
+    try {
+      const user = await updateCurrency(database, request.auth.user.id, request.body?.currencyCode);
+      response.json({ user });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/finance", protect, async (_request, response, next) => {
     try {
       response.json({ data: await getFinanceData(database) });
     } catch (error) {
@@ -193,7 +276,7 @@ export function createApp({ databasePath } = {}) {
     }
   });
 
-  app.post("/api/finance", async (request, response, next) => {
+  app.post("/api/finance", protect, async (request, response, next) => {
     try {
       const payload = request.body || {};
       switch (payload.action) {
