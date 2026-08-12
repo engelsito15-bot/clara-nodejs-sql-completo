@@ -30,14 +30,29 @@ function sqliteColumnExists(database, table, column) {
 }
 
 function ensureSqliteMultiUserSchema(database) {
-  if (!sqliteColumnExists(database, "accounts", "user_id")) {
-    database.exec("ALTER TABLE accounts ADD COLUMN user_id INTEGER");
-  }
-  if (!sqliteColumnExists(database, "transactions", "user_id")) {
-    database.exec("ALTER TABLE transactions ADD COLUMN user_id INTEGER");
-  }
-  if (!sqliteColumnExists(database, "goals", "user_id")) {
-    database.exec("ALTER TABLE goals ADD COLUMN user_id INTEGER");
+  const columns = [
+    ["users", "phone", "TEXT NOT NULL DEFAULT ''"],
+    ["accounts", "user_id", "INTEGER"],
+    ["accounts", "institution_type", "TEXT NOT NULL DEFAULT 'other'"],
+    ["accounts", "institution_name", "TEXT NOT NULL DEFAULT ''"],
+    ["accounts", "product_type", "TEXT NOT NULL DEFAULT 'other'"],
+    ["accounts", "nickname", "TEXT NOT NULL DEFAULT ''"],
+    ["transactions", "user_id", "INTEGER"],
+    ["goals", "user_id", "INTEGER"],
+    ["user_profiles", "employment_status", "TEXT NOT NULL DEFAULT 'employee'"],
+    ["user_profiles", "dependents", "INTEGER NOT NULL DEFAULT 0"],
+    ["user_profiles", "debt_balance", "INTEGER NOT NULL DEFAULT 0"],
+    ["user_profiles", "debt_monthly_payment", "INTEGER NOT NULL DEFAULT 0"],
+    ["user_profiles", "emergency_savings", "INTEGER NOT NULL DEFAULT 0"],
+    ["user_profiles", "payday_one", "INTEGER"],
+    ["user_profiles", "payday_two", "INTEGER"],
+    ["user_profiles", "financial_confidence", "INTEGER NOT NULL DEFAULT 3"],
+  ];
+
+  for (const [table, column, definition] of columns) {
+    if (!sqliteColumnExists(database, table, column)) {
+      database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
   }
 
   database.exec(`
@@ -48,10 +63,20 @@ function ensureSqliteMultiUserSchema(database) {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (user_id, category_id)
     );
+    CREATE TABLE IF NOT EXISTS account_balance_adjustments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      previous_balance INTEGER NOT NULL,
+      new_balance INTEGER NOT NULL,
+      reason TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE INDEX IF NOT EXISTS idx_accounts_user ON accounts(user_id);
     CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, transaction_date);
     CREATE INDEX IF NOT EXISTS idx_goals_user_due_date ON goals(user_id, due_date);
     CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets(user_id);
+    CREATE INDEX IF NOT EXISTS idx_adjustments_user_account ON account_balance_adjustments(user_id, account_id);
   `);
 }
 
@@ -171,14 +196,29 @@ async function tidbColumnExists(connection, table, column) {
 }
 
 async function ensureTidbMultiUserSchema(connection) {
-  if (!(await tidbColumnExists(connection, "accounts", "user_id"))) {
-    await connection.query("ALTER TABLE accounts ADD COLUMN user_id BIGINT NULL");
-  }
-  if (!(await tidbColumnExists(connection, "transactions", "user_id"))) {
-    await connection.query("ALTER TABLE transactions ADD COLUMN user_id BIGINT NULL");
-  }
-  if (!(await tidbColumnExists(connection, "goals", "user_id"))) {
-    await connection.query("ALTER TABLE goals ADD COLUMN user_id BIGINT NULL");
+  const columns = [
+    ["users", "phone", "VARCHAR(30) NOT NULL DEFAULT ''"],
+    ["accounts", "user_id", "BIGINT NULL"],
+    ["accounts", "institution_type", "VARCHAR(30) NOT NULL DEFAULT 'other'"],
+    ["accounts", "institution_name", "VARCHAR(150) NOT NULL DEFAULT ''"],
+    ["accounts", "product_type", "VARCHAR(30) NOT NULL DEFAULT 'other'"],
+    ["accounts", "nickname", "VARCHAR(80) NOT NULL DEFAULT ''"],
+    ["transactions", "user_id", "BIGINT NULL"],
+    ["goals", "user_id", "BIGINT NULL"],
+    ["user_profiles", "employment_status", "VARCHAR(30) NOT NULL DEFAULT 'employee'"],
+    ["user_profiles", "dependents", "INT NOT NULL DEFAULT 0"],
+    ["user_profiles", "debt_balance", "BIGINT NOT NULL DEFAULT 0"],
+    ["user_profiles", "debt_monthly_payment", "BIGINT NOT NULL DEFAULT 0"],
+    ["user_profiles", "emergency_savings", "BIGINT NOT NULL DEFAULT 0"],
+    ["user_profiles", "payday_one", "INT NULL"],
+    ["user_profiles", "payday_two", "INT NULL"],
+    ["user_profiles", "financial_confidence", "INT NOT NULL DEFAULT 3"],
+  ];
+
+  for (const [table, column, definition] of columns) {
+    if (!(await tidbColumnExists(connection, table, column))) {
+      await connection.query(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+    }
   }
 
   await connection.query(`CREATE TABLE IF NOT EXISTS budgets (
@@ -192,11 +232,24 @@ async function ensureTidbMultiUserSchema(connection) {
     CONSTRAINT fk_budgets_category FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
   )`);
 
+  await connection.query(`CREATE TABLE IF NOT EXISTS account_balance_adjustments (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id BIGINT NOT NULL,
+    account_id BIGINT NOT NULL,
+    previous_balance BIGINT NOT NULL,
+    new_balance BIGINT NOT NULL,
+    reason VARCHAR(240) NOT NULL DEFAULT '',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_adjustments_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_adjustments_account FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+  )`);
+
   const indexes = [
     "CREATE INDEX IF NOT EXISTS idx_accounts_user ON accounts(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, transaction_date)",
     "CREATE INDEX IF NOT EXISTS idx_goals_user_due_date ON goals(user_id, due_date)",
     "CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_adjustments_user_account ON account_balance_adjustments(user_id, account_id)",
   ];
   for (const statement of indexes) await connection.query(statement);
 }

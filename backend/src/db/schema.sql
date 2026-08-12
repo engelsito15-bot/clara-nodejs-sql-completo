@@ -8,7 +8,32 @@ CREATE TABLE IF NOT EXISTS users (
   password_salt TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   currency_code TEXT NOT NULL DEFAULT 'DOP',
+  phone TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS user_profiles (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  age INTEGER,
+  income_type TEXT NOT NULL DEFAULT '',
+  income_frequency TEXT NOT NULL DEFAULT '',
+  income_amount INTEGER NOT NULL DEFAULT 0 CHECK (income_amount >= 0),
+  has_payroll_account INTEGER NOT NULL DEFAULT 0,
+  fixed_expenses INTEGER NOT NULL DEFAULT 0 CHECK (fixed_expenses >= 0),
+  planning_period TEXT NOT NULL DEFAULT 'monthly' CHECK (planning_period IN ('monthly', 'biweekly')),
+  plan_purpose TEXT NOT NULL DEFAULT '',
+  savings_target_percent INTEGER NOT NULL DEFAULT 10 CHECK (savings_target_percent BETWEEN 0 AND 100),
+  primary_goal TEXT NOT NULL DEFAULT 'control',
+  employment_status TEXT NOT NULL DEFAULT 'employee',
+  dependents INTEGER NOT NULL DEFAULT 0,
+  debt_balance INTEGER NOT NULL DEFAULT 0 CHECK (debt_balance >= 0),
+  debt_monthly_payment INTEGER NOT NULL DEFAULT 0 CHECK (debt_monthly_payment >= 0),
+  emergency_savings INTEGER NOT NULL DEFAULT 0 CHECK (emergency_savings >= 0),
+  payday_one INTEGER,
+  payday_two INTEGER,
+  financial_confidence INTEGER NOT NULL DEFAULT 3,
+  onboarding_completed INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -25,6 +50,21 @@ CREATE TABLE IF NOT EXISTS accounts (
   kind TEXT NOT NULL CHECK (kind IN ('bank', 'savings', 'cash')),
   balance INTEGER NOT NULL DEFAULT 0 CHECK (balance >= 0),
   color TEXT NOT NULL DEFAULT 'mint',
+  institution_type TEXT NOT NULL DEFAULT 'other',
+  institution_name TEXT NOT NULL DEFAULT '',
+  product_type TEXT NOT NULL DEFAULT 'other',
+  nickname TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+
+CREATE TABLE IF NOT EXISTS account_balance_adjustments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  account_id INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  previous_balance INTEGER NOT NULL CHECK (previous_balance >= 0),
+  new_balance INTEGER NOT NULL CHECK (new_balance >= 0),
+  reason TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -74,6 +114,7 @@ CREATE TABLE IF NOT EXISTS app_meta (
   value TEXT NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_adjustments_user_account ON account_balance_adjustments(user_id, account_id);
 CREATE INDEX IF NOT EXISTS idx_transactions_account_date ON transactions(account_id, transaction_date);
 CREATE INDEX IF NOT EXISTS idx_transactions_category_date ON transactions(category_id, transaction_date);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);

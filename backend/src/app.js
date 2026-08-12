@@ -12,6 +12,8 @@ import {
   requireAuth,
   registerUser,
   updateCurrency,
+  completeOnboarding,
+  updateFinancialProfile,
 } from "./auth.js";
 import { createDatabase, runInTransaction } from "./database.js";
 import { getFinanceData } from "./finance-data.js";
@@ -168,13 +170,120 @@ async function contributeToGoal(database, userId, payload) {
   });
 }
 
+const ACCOUNT_PRODUCTS = new Set(["payroll", "savings", "checking", "certificate", "contribution", "wallet", "investment", "cash", "other"]);
+const INSTITUTION_TYPES = new Set(["bank", "cooperative", "association", "wallet", "cash", "investment", "other"]);
+
+function accountProductLabel(productType) {
+  return {
+    payroll: "Cuenta de nómina",
+    savings: "Cuenta de ahorros",
+    checking: "Cuenta corriente",
+    certificate: "Certificado",
+    contribution: "Aportaciones",
+    wallet: "Billetera digital",
+    investment: "Cuenta de inversión",
+    cash: "Efectivo",
+    other: "Cuenta",
+  }[productType] || "Cuenta";
+}
+
+function accountDetails(payload) {
+  const institutionType = INSTITUTION_TYPES.has(payload.institutionType) ? payload.institutionType : "other";
+  const productType = ACCOUNT_PRODUCTS.has(payload.productType) ? payload.productType : (payload.kind === "cash" ? "cash" : payload.kind === "savings" ? "savings" : "other");
+  const institutionName = String(payload.institutionName || "").trim().slice(0, 150);
+  const nickname = String(payload.nickname || "").trim().slice(0, 80);
+  const explicitName = String(payload.name || "").trim().slice(0, 150);
+  const productLabel = accountProductLabel(productType);
+  const name = institutionName && institutionType !== "cash"
+    ? `${productLabel} · ${institutionName}`.slice(0, 150)
+    : (productType === "cash" || institutionType === "cash")
+      ? (nickname ? `Efectivo · ${nickname}` : "Efectivo")
+      : explicitName || (nickname ? `${productLabel} · ${nickname}` : productLabel);
+  const kind = productType === "cash" || institutionType === "cash" ? "cash" : productType === "savings" ? "savings" : "bank";
+  return { name, kind, institutionType, institutionName, productType, nickname };
+}
+
+async function recordBalanceAdjustment(database, userId, accountId, previousBalance, newBalance, reason) {
+  if (Number(previousBalance) === Number(newBalance)) return;
+  await database.run(
+    `INSERT INTO account_balance_adjustments
+      (user_id, account_id, previous_balance, new_balance, reason)
+     VALUES (?, ?, ?, ?, ?)`,
+    [userId, accountId, previousBalance, newBalance, String(reason || "Ajuste manual de saldo").trim().slice(0, 240)],
+  );
+}
+
 async function createAccount(database, userId, payload) {
-  const name = String(payload.name || "").trim();
   const balance = amountInCents(payload.amount ?? 0, true);
-  const allowedKinds = new Set(["bank", "savings", "cash"]);
-  const kind = allowedKinds.has(payload.kind) ? payload.kind : "bank";
-  if (!name || balance === null) throw requestError("Ingresa un nombre y un saldo válido.");
-  await database.run("INSERT INTO accounts (user_id, name, kind, balance, color) VALUES (?, ?, ?, ?, 'sky')", [userId, name, kind, balance]);
+  const details = accountDetails(payload);
+  if (!details.name || balance === null) throw requestError("Completa los datos de la cuenta y escribe un saldo válido.");
+
+  await runInTransaction(database, async (transaction) => {
+    const result = await transaction.run(
+      `INSERT INTO accounts
+        (user_id, name, kind, balance, color, institution_type, institution_name, product_type, nickname)
+       VALUES (?, ?, ?, ?, 'sky', ?, ?, ?, ?)`,
+      [userId, details.name, details.kind, balance, details.institutionType, details.institutionName, details.productType, details.nickname],
+    );
+    if (balance > 0) {
+      await recordBalanceAdjustment(transaction, userId, result.insertId, 0, balance, "Saldo inicial declarado");
+    }
+  });
+}
+
+async function updateAccount(database, userId, payload) {
+  const accountId = integerId(payload.accountId);
+  const balance = amountInCents(payload.amount ?? 0, true);
+  const details = accountDetails(payload);
+  if (!accountId || !details.name || balance === null) throw requestError("Ingresa los datos válidos de la cuenta.");
+
+  await runInTransaction(database, async (transaction) => {
+    const account = await transaction.get(
+      "SELECT id, balance FROM accounts WHERE id = ? AND user_id = ?",
+      [accountId, userId],
+    );
+    if (!account) throw requestError("La cuenta no existe o no pertenece a tu perfil.", 404);
+
+    await transaction.run(
+      `UPDATE accounts
+       SET name = ?, kind = ?, balance = ?, institution_type = ?, institution_name = ?, product_type = ?, nickname = ?
+       WHERE id = ? AND user_id = ?`,
+      [details.name, details.kind, balance, details.institutionType, details.institutionName, details.productType, details.nickname, accountId, userId],
+    );
+    await recordBalanceAdjustment(
+      transaction, userId, accountId, Number(account.balance), balance,
+      payload.balanceReason || "Saldo actual declarado por el usuario",
+    );
+  });
+}
+
+async function deleteAccount(database, userId, payload) {
+  const accountId = integerId(payload.accountId);
+  if (!accountId) throw requestError("Selecciona una cuenta válida.");
+
+  const account = await database.get(
+    "SELECT id, name, balance FROM accounts WHERE id = ? AND user_id = ?",
+    [accountId, userId],
+  );
+  if (!account) throw requestError("La cuenta no existe o no pertenece a tu perfil.", 404);
+  if (Number(account.balance) !== 0) {
+    throw requestError("Para eliminar una cuenta, primero debe quedar con saldo 0.");
+  }
+
+  const history = await database.get(
+    "SELECT COUNT(*) AS total FROM transactions WHERE user_id = ? AND (account_id = ? OR destination_account_id = ?)",
+    [userId, accountId, accountId],
+  );
+  if (Number(history?.total || 0) > 0) {
+    throw requestError("No puedes eliminar una cuenta con historial. Puedes cambiarle el nombre y conservar tus movimientos.");
+  }
+
+  const count = await database.get("SELECT COUNT(*) AS total FROM accounts WHERE user_id = ?", [userId]);
+  if (Number(count?.total || 0) <= 1) {
+    throw requestError("Debes conservar al menos una cuenta en tu perfil.");
+  }
+
+  await database.run("DELETE FROM accounts WHERE id = ? AND user_id = ?", [accountId, userId]);
 }
 
 function createRequestLimiter({ windowMs, maxAttempts, keyForRequest, message }) {
@@ -288,9 +397,34 @@ export function createApp({ databasePath } = {}) {
     }
   });
 
+
+  app.post("/api/profile/onboarding", protect, async (request, response, next) => {
+    try {
+      const user = await completeOnboarding(database, request.auth.user.id, request.body || {});
+      response.json({ user });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.patch("/api/profile", protect, async (request, response, next) => {
+    try {
+      const user = await updateFinancialProfile(database, request.auth.user.id, request.body || {});
+      response.json({ user });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.patch("/api/settings", protect, async (request, response, next) => {
     try {
-      const user = await updateCurrency(database, request.auth.user.id, request.body?.currencyCode);
+      let user = request.auth.user;
+      if (request.body?.currencyCode) {
+        user = await updateCurrency(database, request.auth.user.id, request.body.currencyCode);
+      }
+      if (request.body?.phone !== undefined) {
+        user = await updateFinancialProfile(database, request.auth.user.id, { phone: request.body.phone });
+      }
       response.json({ user });
     } catch (error) {
       next(error);
@@ -327,6 +461,12 @@ export function createApp({ databasePath } = {}) {
           break;
         case "account":
           await createAccount(database, userId, payload);
+          break;
+        case "account-update":
+          await updateAccount(database, userId, payload);
+          break;
+        case "account-delete":
+          await deleteAccount(database, userId, payload);
           break;
         default:
           throw requestError("Operación no reconocida.");

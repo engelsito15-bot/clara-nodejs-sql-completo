@@ -31,10 +31,19 @@ test("Clara separa los datos de cada perfil y protege la API", async (context) =
   assert.equal(blockedResponse.status, 401);
 
   async function register(name, username, currencyCode = "DOP") {
+    const [firstName, ...lastParts] = name.split(" ");
     const response = await fetch(`${baseUrl}/api/auth/register`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name, username, password: "Clave1234", currencyCode }),
+      body: JSON.stringify({
+        firstName,
+        lastName: lastParts.join(" ") || "Prueba",
+        name,
+        username,
+        phone: "8095551234",
+        password: "Clave1234",
+        currencyCode,
+      }),
     });
     assert.equal(response.status, 201);
     return response.json();
@@ -44,6 +53,7 @@ test("Clara separa los datos de cada perfil y protege la API", async (context) =
   const second = await register("Usuario Dos", "usuario2", "USD");
   assert.equal(first.user.currencyCode, "DOP");
   assert.equal(second.user.currencyCode, "USD");
+  assert.equal(first.user.phone, "+18095551234");
 
   const firstHeaders = { authorization: `Bearer ${first.token}` };
   const secondHeaders = { authorization: `Bearer ${second.token}` };
@@ -89,13 +99,58 @@ test("Clara separa los datos de cada perfil y protege la API", async (context) =
   });
   assert.equal(crossProfileResponse.status, 404);
 
+
+  const accountResponse = await fetch(`${baseUrl}/api/finance`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...firstHeaders },
+    body: JSON.stringify({
+      action: "account",
+      institutionType: "bank",
+      institutionName: "Banreservas",
+      productType: "payroll",
+      nickname: "Nómina",
+      amount: "1250.00",
+    }),
+  });
+  assert.equal(accountResponse.status, 201);
+  const withBankAccount = (await accountResponse.json()).data;
+  const declaredAccount = withBankAccount.accounts.find((item) => item.institutionName === "Banreservas");
+  assert.ok(declaredAccount);
+  assert.equal(declaredAccount.balance, 125000);
+  assert.match(declaredAccount.name, /Banreservas/);
+  assert.equal(withBankAccount.summary.monthlyIncome, 10000);
+
+  const adjustedResponse = await fetch(`${baseUrl}/api/finance`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...firstHeaders },
+    body: JSON.stringify({
+      action: "account-update",
+      accountId: firstBefore.accounts[0].id,
+      institutionType: "bank",
+      institutionName: "Banco Popular Dominicano",
+      productType: "savings",
+      nickname: "Principal",
+      amount: "175.00",
+      balanceReason: "Sincronización manual con el banco",
+    }),
+  });
+  assert.equal(adjustedResponse.status, 200);
+  const adjustedData = (await adjustedResponse.json()).data;
+  const adjustedAccount = adjustedData.accounts.find((item) => item.id === firstBefore.accounts[0].id);
+  assert.equal(adjustedAccount.balance, 17500);
+  assert.equal(adjustedAccount.institutionName, "Banco Popular Dominicano");
+  assert.equal(adjustedData.summary.monthlyIncome, 10000);
+  assert.equal(adjustedData.summary.monthlyExpenses, 0);
+
   const settingsResponse = await fetch(`${baseUrl}/api/settings`, {
     method: "PATCH",
     headers: { "content-type": "application/json", ...firstHeaders },
-    body: JSON.stringify({ currencyCode: "EUR" }),
+    body: JSON.stringify({ currencyCode: "EUR", phone: "8295554321" }),
   });
   assert.equal(settingsResponse.status, 200);
-  assert.equal((await settingsResponse.json()).user.currencyCode, "EUR");
+  const updatedSettingsUser = (await settingsResponse.json()).user;
+  assert.equal(updatedSettingsUser.currencyCode, "EUR");
+  assert.equal(updatedSettingsUser.phone, "+18295554321");
 
   const secondMe = await fetch(`${baseUrl}/api/auth/me`, { headers: secondHeaders });
   assert.equal((await secondMe.json()).user.currencyCode, "USD");

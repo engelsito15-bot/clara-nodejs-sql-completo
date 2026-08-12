@@ -10,7 +10,9 @@ function normalizeNumber(value) {
 export async function getFinanceData(database, userId) {
   const month = monthKey();
   const accounts = await database.all(
-    `SELECT id, name, kind, balance, color
+    `SELECT id, name, kind, balance, color,
+      institution_type AS institutionType, institution_name AS institutionName,
+      product_type AS productType, nickname
      FROM accounts
      WHERE user_id = ?
      ORDER BY CASE kind WHEN 'bank' THEN 1 WHEN 'savings' THEN 2 ELSE 3 END, created_at`,
