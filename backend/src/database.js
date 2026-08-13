@@ -31,12 +31,15 @@ function sqliteColumnExists(database, table, column) {
 
 function ensureSqliteMultiUserSchema(database) {
   const columns = [
+    ["users", "first_name", "TEXT NOT NULL DEFAULT ''"],
+    ["users", "last_name", "TEXT NOT NULL DEFAULT ''"],
     ["users", "phone", "TEXT NOT NULL DEFAULT ''"],
     ["accounts", "user_id", "INTEGER"],
     ["accounts", "institution_type", "TEXT NOT NULL DEFAULT 'other'"],
     ["accounts", "institution_name", "TEXT NOT NULL DEFAULT ''"],
     ["accounts", "product_type", "TEXT NOT NULL DEFAULT 'other'"],
     ["accounts", "nickname", "TEXT NOT NULL DEFAULT ''"],
+    ["accounts", "is_archived", "INTEGER NOT NULL DEFAULT 0"],
     ["transactions", "user_id", "INTEGER"],
     ["goals", "user_id", "INTEGER"],
     ["user_profiles", "employment_status", "TEXT NOT NULL DEFAULT 'employee'"],
@@ -73,6 +76,7 @@ function ensureSqliteMultiUserSchema(database) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_accounts_user ON accounts(user_id);
+    CREATE INDEX IF NOT EXISTS idx_accounts_user_active ON accounts(user_id, is_archived);
     CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, transaction_date);
     CREATE INDEX IF NOT EXISTS idx_goals_user_due_date ON goals(user_id, due_date);
     CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets(user_id);
@@ -102,7 +106,7 @@ function seedSqliteCategories(database) {
 
 function ensureSqliteUserAccounts(database) {
   const users = database.prepare("SELECT id FROM users ORDER BY id").all();
-  const countAccounts = database.prepare("SELECT COUNT(*) AS count FROM accounts WHERE user_id = ?");
+  const countAccounts = database.prepare("SELECT COUNT(*) AS count FROM accounts WHERE user_id = ? AND COALESCE(is_archived, 0) = 0");
   const insertAccount = database.prepare(
     "INSERT INTO accounts (user_id, name, kind, balance, color) VALUES (?, ?, ?, 0, ?)",
   );
@@ -197,12 +201,15 @@ async function tidbColumnExists(connection, table, column) {
 
 async function ensureTidbMultiUserSchema(connection) {
   const columns = [
+    ["users", "first_name", "VARCHAR(60) NOT NULL DEFAULT ''"],
+    ["users", "last_name", "VARCHAR(80) NOT NULL DEFAULT ''"],
     ["users", "phone", "VARCHAR(30) NOT NULL DEFAULT ''"],
     ["accounts", "user_id", "BIGINT NULL"],
     ["accounts", "institution_type", "VARCHAR(30) NOT NULL DEFAULT 'other'"],
     ["accounts", "institution_name", "VARCHAR(150) NOT NULL DEFAULT ''"],
     ["accounts", "product_type", "VARCHAR(30) NOT NULL DEFAULT 'other'"],
     ["accounts", "nickname", "VARCHAR(80) NOT NULL DEFAULT ''"],
+    ["accounts", "is_archived", "TINYINT(1) NOT NULL DEFAULT 0"],
     ["transactions", "user_id", "BIGINT NULL"],
     ["goals", "user_id", "BIGINT NULL"],
     ["user_profiles", "employment_status", "VARCHAR(30) NOT NULL DEFAULT 'employee'"],
@@ -246,6 +253,7 @@ async function ensureTidbMultiUserSchema(connection) {
 
   const indexes = [
     "CREATE INDEX IF NOT EXISTS idx_accounts_user ON accounts(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_accounts_user_active ON accounts(user_id, is_archived)",
     "CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, transaction_date)",
     "CREATE INDEX IF NOT EXISTS idx_goals_user_due_date ON goals(user_id, due_date)",
     "CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets(user_id)",
@@ -277,7 +285,7 @@ async function seedTidbCategories(connection) {
 async function ensureTidbUserAccounts(connection) {
   const [users] = await connection.query("SELECT id FROM users ORDER BY id");
   for (const user of users) {
-    const [[row]] = await connection.execute("SELECT COUNT(*) AS count FROM accounts WHERE user_id = ?", [user.id]);
+    const [[row]] = await connection.execute("SELECT COUNT(*) AS count FROM accounts WHERE user_id = ? AND COALESCE(is_archived, 0) = 0", [user.id]);
     if (Number(row.count || 0) > 0) continue;
     for (const [name, kind, color] of defaultAccounts) {
       await connection.execute(

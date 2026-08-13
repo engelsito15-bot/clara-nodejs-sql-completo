@@ -90,9 +90,15 @@ function safePasswordMatch(password, salt, expectedHex) {
 
 function publicUser(user) {
   const onboardingCompleted = Boolean(Number(user.onboardingCompleted ?? user.onboarding_completed ?? 0));
+  const normalizedFullName = normalizeName(user.name || "");
+  const fallbackParts = normalizedFullName.split(" ");
+  const firstName = normalizeName(user.firstName || user.first_name || fallbackParts[0] || "");
+  const lastName = normalizeName(user.lastName || user.last_name || fallbackParts.slice(1).join(" "));
   return {
     id: Number(user.id),
-    name: user.name,
+    name: normalizedFullName || normalizeName(`${firstName} ${lastName}`),
+    firstName,
+    lastName,
     username: user.username,
     currencyCode: user.currencyCode || user.currency_code || "DOP",
     phone: user.phone || "",
@@ -122,7 +128,8 @@ function publicUser(user) {
 
 async function userWithProfile(database, userId) {
   return database.get(
-    `SELECT u.id, u.name, u.username, u.currency_code AS currencyCode, u.phone,
+    `SELECT u.id, u.name, u.first_name AS firstName, u.last_name AS lastName,
+      u.username, u.currency_code AS currencyCode, u.phone,
       COALESCE(p.onboarding_completed, 0) AS onboardingCompleted,
       p.age,
       COALESCE(p.income_type, '') AS incomeType,
@@ -300,9 +307,7 @@ export async function registerUser(database, payload) {
   if (lastName.length < 2) throw requestError("Escribe tu apellido.");
   if (password.length < 8) throw requestError("La contraseña debe tener al menos 8 caracteres.");
 
-  const generatedUsername = payload.username
-    ? normalizeUsername(payload.username)
-    : await uniqueGeneratedUsername(database, firstName, lastName);
+  const generatedUsername = await uniqueGeneratedUsername(database, firstName, lastName);
 
   if (!/^[a-z0-9._-]{3,40}$/i.test(generatedUsername)) {
     throw requestError("No se pudo generar un usuario válido con ese nombre. Revisa tus datos.");
@@ -318,9 +323,9 @@ export async function registerUser(database, payload) {
   try {
     await database.transaction(async (transaction) => {
       const result = await transaction.run(
-        `INSERT INTO users (name, username, password_salt, password_hash, currency_code, phone)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-        [name, generatedUsername, salt, hash, currencyCode, phone],
+        `INSERT INTO users (name, first_name, last_name, username, password_salt, password_hash, currency_code, phone)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [name, firstName, lastName, generatedUsername, salt, hash, currencyCode, phone],
       );
       userId = result.insertId;
       await seedUserAccounts(transaction, userId);
@@ -412,6 +417,19 @@ export async function completeOnboarding(database, userId, payload) {
 
 export async function updateFinancialProfile(database, userId, payload) {
   const current = publicUser(await userWithProfile(database, userId));
+
+  const wantsIdentityUpdate = payload.firstName !== undefined || payload.lastName !== undefined;
+  if (wantsIdentityUpdate) {
+    const firstName = normalizeName(payload.firstName ?? current.firstName);
+    const lastName = normalizeName(payload.lastName ?? current.lastName);
+    if (firstName.length < 2) throw requestError("Escribe un nombre válido.");
+    if (lastName.length < 2) throw requestError("Escribe un apellido válido.");
+    await database.run(
+      "UPDATE users SET name = ?, first_name = ?, last_name = ? WHERE id = ?",
+      [normalizeName(`${firstName} ${lastName}`), firstName, lastName, userId],
+    );
+  }
+
   if (payload.phone !== undefined) {
     const phone = normalizePhone(payload.phone, true);
     await database.run("UPDATE users SET phone = ? WHERE id = ?", [phone, userId]);

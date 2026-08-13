@@ -14,7 +14,7 @@ export async function getFinanceData(database, userId) {
       institution_type AS institutionType, institution_name AS institutionName,
       product_type AS productType, nickname
      FROM accounts
-     WHERE user_id = ?
+     WHERE user_id = ? AND COALESCE(is_archived, 0) = 0
      ORDER BY CASE kind WHEN 'bank' THEN 1 WHEN 'savings' THEN 2 ELSE 3 END, created_at`,
     [userId],
   );

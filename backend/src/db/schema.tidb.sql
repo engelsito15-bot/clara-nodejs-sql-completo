@@ -1,6 +1,8 @@
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   name VARCHAR(120) NOT NULL,
+  first_name VARCHAR(60) NOT NULL DEFAULT '',
+  last_name VARCHAR(80) NOT NULL DEFAULT '',
   username VARCHAR(40) NOT NULL UNIQUE,
   password_salt VARCHAR(64) NOT NULL,
   password_hash VARCHAR(256) NOT NULL,
@@ -53,6 +55,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   institution_name VARCHAR(150) NOT NULL DEFAULT '',
   product_type VARCHAR(30) NOT NULL DEFAULT 'other',
   nickname VARCHAR(80) NOT NULL DEFAULT '',
+  is_archived TINYINT(1) NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT chk_accounts_kind CHECK (kind IN ('bank', 'savings', 'cash')),
   CONSTRAINT chk_accounts_balance CHECK (balance >= 0),

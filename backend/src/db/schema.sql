@@ -4,6 +4,8 @@ PRAGMA journal_mode = WAL;
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
+  first_name TEXT NOT NULL DEFAULT '',
+  last_name TEXT NOT NULL DEFAULT '',
   username TEXT NOT NULL UNIQUE,
   password_salt TEXT NOT NULL,
   password_hash TEXT NOT NULL,
@@ -54,6 +56,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   institution_name TEXT NOT NULL DEFAULT '',
   product_type TEXT NOT NULL DEFAULT 'other',
   nickname TEXT NOT NULL DEFAULT '',
+  is_archived INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

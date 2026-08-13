@@ -44,7 +44,10 @@ function validDate(value) {
 }
 
 async function accountById(database, id, userId) {
-  return database.get("SELECT id, name, balance FROM accounts WHERE id = ? AND user_id = ?", [id, userId]);
+  return database.get(
+    "SELECT id, name, balance FROM accounts WHERE id = ? AND user_id = ? AND COALESCE(is_archived, 0) = 0",
+    [id, userId],
+  );
 }
 
 async function createTransaction(database, userId, payload) {
@@ -262,7 +265,7 @@ async function deleteAccount(database, userId, payload) {
   if (!accountId) throw requestError("Selecciona una cuenta válida.");
 
   const account = await database.get(
-    "SELECT id, name, balance FROM accounts WHERE id = ? AND user_id = ?",
+    "SELECT id, name, balance FROM accounts WHERE id = ? AND user_id = ? AND COALESCE(is_archived, 0) = 0",
     [accountId, userId],
   );
   if (!account) throw requestError("La cuenta no existe o no pertenece a tu perfil.", 404);
@@ -270,17 +273,25 @@ async function deleteAccount(database, userId, payload) {
     throw requestError("Para eliminar una cuenta, primero debe quedar con saldo 0.");
   }
 
+  const count = await database.get(
+    "SELECT COUNT(*) AS total FROM accounts WHERE user_id = ? AND COALESCE(is_archived, 0) = 0",
+    [userId],
+  );
+  if (Number(count?.total || 0) <= 1) {
+    throw requestError("Debes conservar al menos una cuenta activa en tu perfil.");
+  }
+
   const history = await database.get(
     "SELECT COUNT(*) AS total FROM transactions WHERE user_id = ? AND (account_id = ? OR destination_account_id = ?)",
     [userId, accountId, accountId],
   );
-  if (Number(history?.total || 0) > 0) {
-    throw requestError("No puedes eliminar una cuenta con historial. Puedes cambiarle el nombre y conservar tus movimientos.");
-  }
 
-  const count = await database.get("SELECT COUNT(*) AS total FROM accounts WHERE user_id = ?", [userId]);
-  if (Number(count?.total || 0) <= 1) {
-    throw requestError("Debes conservar al menos una cuenta en tu perfil.");
+  if (Number(history?.total || 0) > 0) {
+    await database.run(
+      "UPDATE accounts SET is_archived = 1 WHERE id = ? AND user_id = ?",
+      [accountId, userId],
+    );
+    return;
   }
 
   await database.run("DELETE FROM accounts WHERE id = ? AND user_id = ?", [accountId, userId]);
@@ -422,8 +433,16 @@ export function createApp({ databasePath } = {}) {
       if (request.body?.currencyCode) {
         user = await updateCurrency(database, request.auth.user.id, request.body.currencyCode);
       }
-      if (request.body?.phone !== undefined) {
-        user = await updateFinancialProfile(database, request.auth.user.id, { phone: request.body.phone });
+      if (
+        request.body?.phone !== undefined ||
+        request.body?.firstName !== undefined ||
+        request.body?.lastName !== undefined
+      ) {
+        user = await updateFinancialProfile(database, request.auth.user.id, {
+          phone: request.body.phone,
+          firstName: request.body.firstName,
+          lastName: request.body.lastName,
+        });
       }
       response.json({ user });
     } catch (error) {

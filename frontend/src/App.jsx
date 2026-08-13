@@ -796,10 +796,12 @@ function SavingsApp() {
     const fields = new FormData(event.currentTarget);
     const currencyCode = fields.get("currencyCode");
     const phone = fields.get("phone");
+    const firstName = fields.get("firstName");
+    const lastName = fields.get("lastName");
     try {
       const { response, result } = await apiRequest("/api/settings", {
         method: "PATCH",
-        body: JSON.stringify({ currencyCode, phone }),
+        body: JSON.stringify({ currencyCode, phone, firstName, lastName }),
       }, token);
       if (response.status === 401) {
         clearSession();
@@ -1403,7 +1405,7 @@ function OperationModal({ modal, data, saving, error, user, onClose, onSubmit })
 
         {modal.kind === "account-delete" && account && <div className="danger-confirmation">
           <span><Icon name="trash" size={20} /></span>
-          <div><strong>¿Eliminar esta cuenta?</strong><p>Solo se puede eliminar si está en cero y no tiene movimientos. Clara nunca eliminará historial financiero para forzar esta acción.</p></div>
+          <div><strong>¿Eliminar esta cuenta?</strong><p>Debe estar en saldo 0. Si tiene movimientos, Clara la ocultará de tus cuentas activas y conservará el historial; si nunca tuvo movimientos, se eliminará definitivamente.</p></div>
         </div>}
 
         {modal.kind === "plan-purpose" && <>
@@ -1432,6 +1434,15 @@ function SettingsModal({ user, saving, error, onClose, onSubmit, onLogout, onEdi
         <span><strong>{user.name}</strong><small>@{user.username}</small></span>
       </div>
       <form onSubmit={onSubmit}>
+        <div className="form-grid">
+          <label><span>Nombre</span><input name="firstName" autoComplete="given-name" required defaultValue={user.firstName || user.name?.split(" ")[0] || ""} /></label>
+          <label><span>Apellido</span><input name="lastName" autoComplete="family-name" required defaultValue={user.lastName || user.name?.split(" ").slice(1).join(" ") || ""} /></label>
+        </div>
+        <div className="generated-user settings-generated-user">
+          <span><Icon name="user" size={16} /> Usuario de acceso</span>
+          <strong>@{user.username}</strong>
+          <small>Tu usuario se genera al registrarte y no cambia cuando editas tu nombre.</small>
+        </div>
         <label><span>Teléfono del perfil</span><div className="input-with-icon"><Icon name="phone" size={16} /><input type="tel" name="phone" autoComplete="tel" inputMode="tel" required defaultValue={user.phone || ""} placeholder="Ej. (809) 555-1234" /></div></label>
         <label><span>Moneda del sistema</span>
           <select name="currencyCode" defaultValue={user.currencyCode || "DOP"}>
