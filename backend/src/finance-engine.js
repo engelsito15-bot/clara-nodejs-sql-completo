@@ -6,6 +6,7 @@ const INSTITUTION_TYPES = new Set(["bank", "cooperative", "association", "wallet
 const CURRENCY_CODES = new Set(["DOP", "USD", "EUR", "GBP", "MXN", "COP", "PEN", "BOB"]);
 const SOURCE_TYPES = new Set(["MANUAL", "ASSISTANT", "EMAIL", "IMPORT", "BANK_API"]);
 const CATEGORY_COLORS = new Set(["forest", "coral", "sky", "lilac", "sun", "mint"]);
+const BUDGET_KINDS = new Set(["fixed", "flexible", "savings"]);
 
 function requestError(message, status = 400) {
   const error = new Error(message);
@@ -258,15 +259,125 @@ export async function createTransfer(database, userId, payload) {
 
 export async function updateBudget(database, userId, payload) {
   const categoryId = integerId(payload.categoryId);
-  const monthlyLimit = amountInCents(payload.monthlyLimit, true);
-  if (!categoryId || monthlyLimit === null) throw requestError("Ingresa un presupuesto válido.");
+  const periodLimit = amountInCents(payload.periodLimit ?? payload.monthlyLimit, true);
+  const budgetKind = BUDGET_KINDS.has(payload.budgetKind) ? payload.budgetKind : "flexible";
+  const note = String(payload.budgetNote || "").trim().slice(0, 240);
+  if (!categoryId || periodLimit === null) throw requestError("Ingresa un presupuesto válido.");
+
   const category = await categoryById(database, categoryId, userId);
   if (!category) throw requestError("La categoría no existe.", 404);
-  const existing = await database.get("SELECT user_id FROM budgets WHERE user_id = ? AND category_id = ?", [userId, categoryId]);
+
+  const settings = await userFinanceSettings(database, userId);
+  const periodKey = periodKeyForDate(validDate(), settings.planningPeriod);
+  const existing = await database.get(
+    "SELECT user_id FROM period_budgets WHERE user_id = ? AND category_id = ? AND period_key = ?",
+    [userId, categoryId, periodKey],
+  );
+
   if (existing) {
-    await database.run("UPDATE budgets SET monthly_limit = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND category_id = ?", [monthlyLimit, userId, categoryId]);
+    await database.run(
+      `UPDATE period_budgets
+          SET limit_amount = ?, budget_kind = ?, note = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ? AND category_id = ? AND period_key = ?`,
+      [periodLimit, budgetKind, note, userId, categoryId, periodKey],
+    );
   } else {
-    await database.run("INSERT INTO budgets (user_id, category_id, monthly_limit) VALUES (?, ?, ?)", [userId, categoryId, monthlyLimit]);
+    await database.run(
+      `INSERT INTO period_budgets
+        (user_id, category_id, period_key, limit_amount, budget_kind, note)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [userId, categoryId, periodKey, periodLimit, budgetKind, note],
+    );
+  }
+
+  if (settings.planningPeriod === "monthly") {
+    const legacy = await database.get("SELECT user_id FROM budgets WHERE user_id = ? AND category_id = ?", [userId, categoryId]);
+    if (legacy) {
+      await database.run(
+        "UPDATE budgets SET monthly_limit = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND category_id = ?",
+        [periodLimit, userId, categoryId],
+      );
+    } else {
+      await database.run(
+        "INSERT INTO budgets (user_id, category_id, monthly_limit) VALUES (?, ?, ?)",
+        [userId, categoryId, periodLimit],
+      );
+    }
+  }
+}
+
+function previousPeriodKey(periodKey, planningPeriod) {
+  if (planningPeriod !== "biweekly") {
+    const [year, month] = String(periodKey).split("-").map(Number);
+    const previous = new Date(Date.UTC(year, month - 2, 1));
+    return `${previous.getUTCFullYear()}-${String(previous.getUTCMonth() + 1).padStart(2, "0")}`;
+  }
+
+  const match = String(periodKey).match(/^(\d{4})-(\d{2})-Q([12])$/);
+  if (!match) return "";
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const half = Number(match[3]);
+  if (half === 2) return `${year}-${String(month).padStart(2, "0")}-Q1`;
+  const previous = new Date(Date.UTC(year, month - 2, 1));
+  return `${previous.getUTCFullYear()}-${String(previous.getUTCMonth() + 1).padStart(2, "0")}-Q2`;
+}
+
+export async function copyPreviousBudget(database, userId) {
+  const settings = await userFinanceSettings(database, userId);
+  const currentKey = periodKeyForDate(validDate(), settings.planningPeriod);
+  const previousKey = previousPeriodKey(currentKey, settings.planningPeriod);
+
+  let rows = await database.all(
+    `SELECT category_id AS categoryId, limit_amount AS limitAmount,
+      COALESCE(budget_kind, 'flexible') AS budgetKind, COALESCE(note, '') AS note
+     FROM period_budgets
+     WHERE user_id = ? AND period_key = ?`,
+    [userId, previousKey],
+  );
+
+  if (!rows.length) {
+    rows = await database.all(
+      `SELECT category_id AS categoryId, monthly_limit AS monthlyLimit
+       FROM budgets
+       WHERE user_id = ? AND monthly_limit > 0`,
+      [userId],
+    );
+    rows = rows.map((row) => ({
+      categoryId: Number(row.categoryId),
+      limitAmount: settings.planningPeriod === "biweekly"
+        ? Math.round(Number(row.monthlyLimit || 0) / 2)
+        : Number(row.monthlyLimit || 0),
+      budgetKind: "flexible",
+      note: "",
+    }));
+  }
+
+  if (!rows.length) throw requestError("No encontré un plan anterior para copiar.");
+
+  for (const row of rows) {
+    const category = await categoryById(database, Number(row.categoryId), userId);
+    if (!category) continue;
+    const existing = await database.get(
+      "SELECT user_id FROM period_budgets WHERE user_id = ? AND category_id = ? AND period_key = ?",
+      [userId, Number(row.categoryId), currentKey],
+    );
+    const values = [Number(row.limitAmount || 0), row.budgetKind || "flexible", row.note || ""];
+    if (existing) {
+      await database.run(
+        `UPDATE period_budgets
+            SET limit_amount = ?, budget_kind = ?, note = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE user_id = ? AND category_id = ? AND period_key = ?`,
+        [...values, userId, Number(row.categoryId), currentKey],
+      );
+    } else {
+      await database.run(
+        `INSERT INTO period_budgets
+          (user_id, category_id, period_key, limit_amount, budget_kind, note)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [userId, Number(row.categoryId), currentKey, ...values],
+      );
+    }
   }
 }
 
@@ -510,7 +621,8 @@ export async function deleteCategory(database, userId, payload) {
 
   const history = await database.get("SELECT COUNT(*) AS total FROM transactions WHERE user_id = ? AND category_id = ?", [userId, categoryId]);
   const budget = await database.get("SELECT COUNT(*) AS total FROM budgets WHERE user_id = ? AND category_id = ?", [userId, categoryId]);
-  if (Number(history?.total || 0) > 0 || Number(budget?.total || 0) > 0) {
+  const periodBudget = await database.get("SELECT COUNT(*) AS total FROM period_budgets WHERE user_id = ? AND category_id = ?", [userId, categoryId]);
+  if (Number(history?.total || 0) > 0 || Number(budget?.total || 0) > 0 || Number(periodBudget?.total || 0) > 0) {
     await database.run("UPDATE categories SET is_active = 0 WHERE id = ? AND user_id = ?", [categoryId, userId]);
     return;
   }

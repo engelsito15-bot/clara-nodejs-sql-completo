@@ -21,6 +21,7 @@ import {
   createTransaction as engineCreateTransaction,
   createTransfer as engineCreateTransfer,
   updateBudget as engineUpdateBudget,
+  copyPreviousBudget as engineCopyPreviousBudget,
   createGoal as engineCreateGoal,
   contributeToGoal as engineContributeToGoal,
   createAccount as engineCreateAccount,
@@ -484,6 +485,9 @@ export function createApp({ databasePath } = {}) {
           break;
         case "budget":
           await engineUpdateBudget(database, userId, payload);
+          break;
+        case "budget-copy":
+          await engineCopyPreviousBudget(database, userId);
           break;
         case "goal":
           await engineCreateGoal(database, userId, payload);

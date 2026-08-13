@@ -5,13 +5,60 @@ const EMPTY_DATA = {
   accounts: [],
   categories: [],
   transactions: [],
+  adjustments: [],
+  balanceHistory: [],
   goals: [],
+  budgetPlan: {
+    periodKey: "",
+    assigned: 0,
+    spent: 0,
+    remaining: 0,
+    unassigned: 0,
+    expectedIncome: 0,
+    incomeReference: 0,
+    liquidBalance: 0,
+    fixedReserve: 0,
+    savingsReserve: 0,
+    safeToSpend: 0,
+    dailySafeToSpend: 0,
+    daysForSafeSpend: 1,
+    safeUntil: "",
+    safeUntilKind: "period",
+    nextPayday: null,
+    usingProfileFixedFallback: false,
+    alerts: [],
+    alertCount: 0,
+    configuredEnvelopes: 0,
+    legacyEnvelopes: 0,
+  },
+  period: {
+    mode: "monthly",
+    key: "",
+    start: "",
+    end: "",
+    label: "Periodo actual",
+    shortLabel: "Periodo actual",
+  },
   summary: {
     totalBalance: 0,
+    primaryBalance: 0,
+    primaryCurrency: "DOP",
+    currencyTotals: {},
+    hasMixedCurrencies: false,
     monthlyIncome: 0,
     monthlyExpenses: 0,
+    periodIncome: 0,
+    periodExpenses: 0,
+    cashflowByCurrency: {},
     budgetTotal: 0,
+    budgetSpent: 0,
     budgetAvailable: 0,
+    safeToSpend: 0,
+    dailySafeToSpend: 0,
+    fixedReserve: 0,
+    savingsReserve: 0,
+    liquidBalance: 0,
+    budgetAlertCount: 0,
   },
 };
 
@@ -19,9 +66,12 @@ const navItems = [
   { id: "inicio", label: "Inicio", icon: "home" },
   { id: "movimientos", label: "Movimientos", icon: "activity" },
   { id: "presupuesto", label: "Presupuesto", icon: "budget" },
+  { id: "categorias", label: "Categorías", icon: "tags" },
   { id: "metas", label: "Metas", icon: "target" },
   { id: "cuentas", label: "Cuentas", icon: "wallet" },
 ];
+
+const mobileNavItems = navItems.filter((item) => item.id !== "categorias");
 
 const iconPaths = {
   home: ["M3 10.5 12 3l9 7.5", "M5 9.5V21h14V9.5", "M9 21v-7h6v7"],
@@ -57,6 +107,9 @@ const iconPaths = {
   logout: ["M10 17l5-5-5-5", "M15 12H3", "M21 19V5a2 2 0 0 0-2-2h-6"],
   arrowRight: ["M5 12h14", "m13 6 6 6-6 6"],
   refresh: ["M20 11a8 8 0 1 0-2.34 5.66", "M20 4v7h-7"],
+  tags: ["M20.6 13.6 11 4H4v7l9.6 9.6a2 2 0 0 0 2.8 0l4.2-4.2a2 2 0 0 0 0-2.8Z", "M7.5 7.5h.01"],
+  history: ["M3 12a9 9 0 1 0 3-6.7", "M3 4v5h5", "M12 7v5l3 2"],
+  layers: ["m12 2 9 5-9 5-9-5 9-5Z", "m3 12 9 5 9-5", "m3 17 9 5 9-5"],
 };
 
 function Icon({ name, size = 18, strokeWidth = 1.8, className = "" }) {
@@ -95,6 +148,7 @@ const TOKEN_KEY = "clara_session";
 const API_BASE_URL = (import.meta.env.VITE_API_URL || "").replace(/\/$/, "");
 const MoneyContext = createContext({
   money: () => "0,00",
+  moneyFor: () => "0,00",
   shortMoney: () => "0",
   currencySymbol: "RD$",
   currencyCode: "DOP",
@@ -164,24 +218,40 @@ function monthName() {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
-function chartLabels() {
-  const now = new Date();
-  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const month = new Intl.DateTimeFormat("es-DO", { month: "short" }).format(now).replace(".", "");
-  return [1, 8, 15, 22, lastDay].map((day) => `${Math.min(day, lastDay)} ${month}`);
+function chartLabels(period = null) {
+  if (!period?.start || !period?.end) {
+    const now = new Date();
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const month = new Intl.DateTimeFormat("es-DO", { month: "short" }).format(now).replace(".", "");
+    return [1, 8, 15, 22, lastDay].map((day) => `${Math.min(day, lastDay)} ${month}`);
+  }
+  const start = new Date(`${period.start}T12:00:00`);
+  const end = new Date(`${period.end}T12:00:00`);
+  const days = Math.max(1, Math.round((end - start) / 86_400_000));
+  return [0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+    const date = new Date(start.getTime() + Math.round(days * ratio) * 86_400_000);
+    return new Intl.DateTimeFormat("es-DO", { day: "numeric", month: "short" }).format(date).replace(".", "");
+  });
 }
 
-function buildFlowBars(transactions) {
-  const now = new Date();
-  const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+function buildFlowBars(transactions, period, primaryCurrency = "DOP") {
+  const start = period?.start || "";
+  const end = period?.end || "";
+  if (!start || !end) return { hasActivity: false, bars: Array.from({ length: 14 }, () => ({ height: 0, highlight: false })) };
+
+  const startDate = new Date(`${start}T12:00:00`);
+  const endDate = new Date(`${end}T12:00:00`);
+  const days = Math.max(1, Math.round((endDate - startDate) / 86_400_000) + 1);
   const totals = Array.from({ length: 14 }, () => 0);
 
   transactions.forEach((transaction) => {
-    if (!String(transaction.transactionDate || "").startsWith(month)) return;
-    const day = Number(String(transaction.transactionDate).slice(8, 10));
-    if (!day) return;
-    const index = Math.min(13, Math.floor(((day - 1) / lastDay) * 14));
+    if (!["income", "expense"].includes(transaction.type)) return;
+    if ((transaction.currencyCode || primaryCurrency) !== primaryCurrency) return;
+    const dateText = String(transaction.transactionDate || "");
+    if (dateText < start || dateText > end) return;
+    const current = new Date(`${dateText}T12:00:00`);
+    const dayOffset = Math.max(0, Math.round((current - startDate) / 86_400_000));
+    const index = Math.min(13, Math.floor((dayOffset / days) * 14));
     totals[index] += Number(transaction.amount || 0);
   });
 
@@ -623,6 +693,7 @@ function SavingsApp() {
   const [showBalance, setShowBalance] = useState(true);
   const [search, setSearch] = useState("");
   const [transactionFilter, setTransactionFilter] = useState("all");
+  const [transactionPeriodFilter, setTransactionPeriodFilter] = useState("current");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [onboardingSaving, setOnboardingSaving] = useState(false);
@@ -635,6 +706,7 @@ function SavingsApp() {
     currencyCode,
     currencySymbol: currencyInfo(currencyCode).symbol,
     money: (cents) => formatMoney(cents, currencyCode),
+    moneyFor: (cents, code) => formatMoney(cents, code || currencyCode),
     shortMoney: (cents) => formatShortMoney(cents, currencyCode),
   }), [currencyCode]);
 
@@ -709,12 +781,16 @@ function SavingsApp() {
 
   const filteredTransactions = useMemo(() => {
     const query = search.trim().toLocaleLowerCase("es");
+    const periodStart = data.period?.start || "";
+    const periodEnd = data.period?.end || "";
     return data.transactions.filter((transaction) => {
       const matchesFilter = transactionFilter === "all" || transaction.type === transactionFilter;
-      const matchesQuery = !query || `${transaction.description} ${transaction.categoryName ?? ""} ${transaction.accountName}`.toLocaleLowerCase("es").includes(query);
-      return matchesFilter && matchesQuery;
+      const matchesQuery = !query || `${transaction.description} ${transaction.categoryName ?? ""} ${transaction.parentCategoryName ?? ""} ${transaction.accountName}`.toLocaleLowerCase("es").includes(query);
+      const date = String(transaction.transactionDate || "");
+      const matchesPeriod = transactionPeriodFilter === "all" || (!periodStart || !periodEnd) || (date >= periodStart && date <= periodEnd);
+      return matchesFilter && matchesQuery && matchesPeriod;
     });
-  }, [data.transactions, search, transactionFilter]);
+  }, [data.transactions, data.period, search, transactionFilter, transactionPeriodFilter]);
 
   function handleAuthenticated(session) {
     localStorage.setItem(TOKEN_KEY, session.token);
@@ -749,6 +825,8 @@ function SavingsApp() {
       payload.action = modal.kind;
       if (modal.kind === "budget") payload.categoryId = modal.referenceId;
       if (modal.kind === "account-update" || modal.kind === "account-delete") payload.accountId = modal.referenceId;
+      if (modal.kind === "category" && modal.referenceId) payload.parentId = modal.referenceId;
+      if (modal.kind === "category-update" || modal.kind === "category-delete") payload.categoryId = modal.referenceId;
     }
 
     try {
@@ -763,8 +841,9 @@ function SavingsApp() {
         if (response.status === 401) { clearSession(); return; }
         if (!response.ok || !result?.user) throw new Error(result?.error || "No se pudo actualizar tu propósito.");
         setAuth((current) => ({ ...current, user: result.user }));
+        await refresh(token);
         setModal(null);
-        setNotice("Tu propósito quedó actualizado.");
+        setNotice("Tu propósito y período quedaron actualizados.");
         window.setTimeout(() => setNotice(""), 3500);
         return;
       }
@@ -900,6 +979,7 @@ function SavingsApp() {
             <h1>{viewTitle(activeView)}</h1>
           </div>
           <div className="topbar-actions">
+            <span className="period-pill"><Icon name="calendar" size={14} /> {data.period?.shortLabel || "Periodo actual"}</span>
             <span className={loading ? "save-status loading" : "save-status"}>
               <i /> {loading ? "Sincronizando…" : "Todo guardado"}
             </span>
@@ -929,15 +1009,19 @@ function SavingsApp() {
           setSearch={setSearch}
           filter={transactionFilter}
           setFilter={setTransactionFilter}
+          periodFilter={transactionPeriodFilter}
+          setPeriodFilter={setTransactionPeriodFilter}
+          period={data.period}
           openModal={openModal}
         />}
-        {activeView === "presupuesto" && <BudgetView data={data} openModal={openModal} />}
+        {activeView === "presupuesto" && <BudgetView data={data} openModal={openModal} goTo={setActiveView} />}
+        {activeView === "categorias" && <CategoriesView data={data} openModal={openModal} />}
         {activeView === "metas" && <GoalsView data={data} openModal={openModal} />}
         {activeView === "cuentas" && <AccountsView data={data} openModal={openModal} showBalance={showBalance} />}
       </main>
 
       <nav className="mobile-nav" aria-label="Navegación móvil">
-        {navItems.map((item) => <button key={item.id} className={activeView === item.id ? "active" : ""} onClick={() => setActiveView(item.id)}>
+        {mobileNavItems.map((item) => <button key={item.id} className={activeView === item.id ? "active" : ""} onClick={() => setActiveView(item.id)}>
           <span><Icon name={item.icon} size={19} /></span>
           <small>{item.label}</small>
         </button>)}
@@ -970,6 +1054,7 @@ function viewTitle(view) {
     inicio: "Tu dinero, bien pensado.",
     movimientos: "Cada movimiento cuenta.",
     presupuesto: "Haz que cada monto tenga un propósito.",
+    categorias: "Ordena tu dinero a tu manera.",
     metas: "Ahorra con un destino.",
     cuentas: "Todo tu dinero, en orden.",
   };
@@ -977,12 +1062,12 @@ function viewTitle(view) {
 }
 
 function Dashboard({ data, showBalance, setShowBalance, openModal, goTo, user }) {
-  const { money, shortMoney, currencySymbol } = useMoney();
+  const { money, moneyFor, shortMoney, currencySymbol, currencyCode } = useMoney();
   const savingsRate = data.summary.monthlyIncome
     ? Math.max(0, Math.round(((data.summary.monthlyIncome - data.summary.monthlyExpenses) / data.summary.monthlyIncome) * 100))
     : 0;
-  const flow = buildFlowBars(data.transactions);
-  const labels = chartLabels();
+  const flow = buildFlowBars(data.transactions, data.period, currencyCode);
+  const labels = chartLabels(data.period);
   const profile = user?.profile || {};
   const planningLabel = profile.planningPeriod === "biweekly" ? "quincena" : "mes";
   const expectedMargin = Math.max(Number(profile.incomeAmount || 0) - Number(profile.fixedExpenses || 0), 0);
@@ -996,16 +1081,19 @@ function Dashboard({ data, showBalance, setShowBalance, openModal, goTo, user })
     <div className="dashboard-primary">
       <section className="balance-hero premium-hero">
         <div className="hero-topline">
-          <span>Patrimonio total</span>
+          <span>{data.summary.hasMixedCurrencies ? `Patrimonio en ${currencyCode}` : "Patrimonio total"}</span>
           <button className="icon-button" onClick={() => setShowBalance(!showBalance)} aria-label={showBalance ? "Ocultar saldos" : "Mostrar saldos"}>
             <Icon name={showBalance ? "eye" : "eyeOff"} size={16} />
           </button>
         </div>
         <strong className="hero-balance">{showBalance ? money(data.summary.totalBalance) : `${currencySymbol} ••••••`}</strong>
         <div className="hero-meta">
-          <span><i className="positive-dot" /> Disponible en presupuesto <strong>{showBalance ? money(data.summary.budgetAvailable) : "••••"}</strong></span>
-          <span className="hero-change">{savingsRate}% libre</span>
+          <span><i className="positive-dot" /> Seguro para gastar <strong>{showBalance ? money(data.summary.safeToSpend ?? data.summary.budgetAvailable) : "••••"}</strong></span>
+          <span className="hero-change">{data.summary.budgetAlertCount ? `${data.summary.budgetAlertCount} alerta${data.summary.budgetAlertCount === 1 ? "" : "s"}` : `${savingsRate}% libre`}</span>
         </div>
+        {data.summary.hasMixedCurrencies && <div className="currency-total-strip">
+          {Object.entries(data.summary.currencyTotals || {}).map(([code, total]) => <span key={code}><small>{code}</small><strong>{showBalance ? moneyFor(total, code) : `${currencyInfo(code).symbol} ••••`}</strong></span>)}
+        </div>}
         <div className="quick-actions">
           <button onClick={() => openModal("expense")}><span className="quick-icon coral"><Icon name="minus" size={18} /></span><span><strong>Gasto</strong><small>Registrar salida</small></span></button>
           <button onClick={() => openModal("income")}><span className="quick-icon mint"><Icon name="plus" size={18} /></span><span><strong>Ingreso</strong><small>Sumar dinero</small></span></button>
@@ -1015,26 +1103,26 @@ function Dashboard({ data, showBalance, setShowBalance, openModal, goTo, user })
 
       <section className="section-card cashflow-card elevated-card">
         <div className="section-heading">
-          <div><p className="eyebrow">{currentMonthLabel()}</p><h2>Flujo del mes</h2></div>
+          <div><p className="eyebrow">{data.period?.label || currentMonthLabel()}</p><h2>Flujo del {data.period?.mode === "biweekly" ? "período" : "mes"}</h2></div>
           <div className="flow-legend">
             <span><i className="income-dot" /> Entró <strong>{shortMoney(data.summary.monthlyIncome)}</strong></span>
             <span><i className="expense-dot" /> Salió <strong>{shortMoney(data.summary.monthlyExpenses)}</strong></span>
           </div>
         </div>
-        <div className={flow.hasActivity ? "flow-chart" : "flow-chart empty"} aria-label={`Gráfico del flujo de dinero de ${monthName()}`}>
+        <div className={flow.hasActivity ? "flow-chart" : "flow-chart empty"} aria-label={`Gráfico del flujo de dinero de ${data.period?.label || monthName()}`}>
           {flow.bars.map((bar, index) => <span className="bar-track" key={index}><i className={bar.highlight ? "chart-bar highlight" : "chart-bar"} style={{ height: `${bar.height}%` }} /></span>)}
-          {!flow.hasActivity && <span className="flow-empty-message"><Icon name="chart" size={18} /> Aún no hay movimientos este mes.</span>}
+          {!flow.hasActivity && <span className="flow-empty-message"><Icon name="chart" size={18} /> Aún no hay movimientos en este período.</span>}
         </div>
         <div className="chart-labels">{labels.map((label) => <span key={label}>{label}</span>)}</div>
       </section>
 
       <section className="section-card elevated-card">
         <div className="section-heading">
-          <div><p className="eyebrow">Plan del mes</p><h2>Dinero con propósito</h2></div>
+          <div><p className="eyebrow">Plan del período</p><h2>Dinero con propósito</h2></div>
           <button className="text-button" onClick={() => goTo("presupuesto")}>Ver presupuesto <Icon name="chevronRight" size={14} /></button>
         </div>
         <div className="budget-list compact">
-          {data.categories.slice(0, 4).map((category) => <BudgetRow key={category.id} category={category} onEdit={() => openModal("budget", category.id)} compact />)}
+          {data.categories.filter((category) => !category.parentId).slice(0, 4).map((category) => <BudgetRow key={category.id} category={category} onEdit={() => openModal("budget", category.id)} compact />)}
         </div>
       </section>
 
@@ -1084,7 +1172,7 @@ function Dashboard({ data, showBalance, setShowBalance, openModal, goTo, user })
           {data.accounts.map((account) => <div className="account-row" key={account.id}>
             <span className={`account-symbol ${account.color}`}><Icon name={account.institutionType === "cooperative" ? "users" : account.kind === "cash" ? "wallet" : "building"} size={15} /></span>
             <span><strong>{account.name}</strong><small>{accountSubtitle(account)}</small></span>
-            <strong>{showBalance ? money(account.balance) : "••••"}</strong>
+            <strong>{showBalance ? moneyFor(account.balance, account.currencyCode) : "••••"}</strong>
           </div>)}
         </div>
         <button className="secondary-action full" onClick={() => openModal("transfer")}><Icon name="transfer" size={15} /> Hacer transferencia</button>
@@ -1109,58 +1197,174 @@ function Dashboard({ data, showBalance, setShowBalance, openModal, goTo, user })
         <span className="insight-mark"><Icon name="sparkles" size={17} /></span>
         <p>{data.summary.budgetTotal ? "Resumen inteligente" : "Empieza con un plan"}</p>
         <strong>{data.summary.budgetTotal
-          ? `Has utilizado ${Math.round((data.summary.monthlyExpenses / Math.max(data.summary.budgetTotal, 1)) * 100)}% de tu presupuesto mensual.`
-          : `Tu objetivo de ahorro está en ${profile.savingsTargetPercent || 10}%. Define límites por categoría para que Clara pueda medir tu avance.`}</strong>
+          ? data.summary.budgetAlertCount
+            ? `${data.summary.budgetAlertCount} sobre${data.summary.budgetAlertCount === 1 ? "" : "s"} necesita${data.summary.budgetAlertCount === 1 ? "" : "n"} atención. Has utilizado ${Math.round((Number(data.summary.budgetSpent || 0) / Math.max(Number(data.summary.budgetTotal || 0), 1)) * 100)}% de lo planificado.`
+            : `Has utilizado ${Math.round((Number(data.summary.budgetSpent || 0) / Math.max(Number(data.summary.budgetTotal || 0), 1)) * 100)}% de lo planificado y Clara mantiene protegidos tus compromisos configurados.`
+          : `Tu objetivo de ahorro está en ${profile.savingsTargetPercent || 10}%. Crea sobres para que Clara calcule cuánto puedes gastar con más tranquilidad.`}</strong>
       </section>
     </aside>
   </div>;
 }
 
-function TransactionsView({ transactions, search, setSearch, filter, setFilter, openModal }) {
+function TransactionsView({ transactions, search, setSearch, filter, setFilter, periodFilter, setPeriodFilter, period, openModal }) {
   return <section className="page-card">
     <div className="page-intro">
-      <div><p className="eyebrow">Historial completo</p><h2>Movimientos</h2><p>Busca, revisa y entiende exactamente a dónde fue tu dinero.</p></div>
+      <div>
+        <p className="eyebrow">Motor financiero · {period?.shortLabel || "Periodo actual"}</p>
+        <h2>Movimientos</h2>
+        <p>Ingresos, gastos y transferencias quedan separados para que mover dinero entre tus cuentas nunca parezca un gasto.</p>
+      </div>
       <div className="split-actions"><button className="secondary-action" onClick={() => openModal("income")}><Icon name="plus" size={15} /> Ingreso</button><button className="primary-action" onClick={() => openModal("expense")}><Icon name="plus" size={15} /> Gasto</button></div>
     </div>
-    <div className="transaction-toolbar">
-      <label className="search-field"><span><Icon name="search" size={16} /></span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por nombre, cuenta o categoría" aria-label="Buscar movimientos" /></label>
-      <div className="filter-chips" aria-label="Filtrar movimientos">
-        {[["all", "Todos"], ["expense", "Gastos"], ["income", "Ingresos"], ["transfer", "Transferencias"]].map(([value, label]) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{label}</button>)}
+    <div className="transaction-toolbar finance-toolbar">
+      <label className="search-field"><span><Icon name="search" size={16} /></span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por concepto, cuenta o categoría" aria-label="Buscar movimientos" /></label>
+      <div className="toolbar-groups">
+        <div className="filter-chips" aria-label="Filtrar movimientos">
+          {[["all", "Todos"], ["expense", "Gastos"], ["income", "Ingresos"], ["transfer", "Transferencias"]].map(([value, label]) => <button key={value} className={filter === value ? "active" : ""} onClick={() => setFilter(value)}>{label}</button>)}
+        </div>
+        <div className="filter-chips period-filter" aria-label="Filtrar por período">
+          <button className={periodFilter === "current" ? "active" : ""} onClick={() => setPeriodFilter("current")}>{period?.mode === "biweekly" ? "Esta quincena" : "Este mes"}</button>
+          <button className={periodFilter === "all" ? "active" : ""} onClick={() => setPeriodFilter("all")}>Todo</button>
+        </div>
       </div>
     </div>
+    <div className="period-context-banner"><Icon name="calendar" size={15} /><span><strong>{period?.label || "Periodo actual"}</strong><small>La planificación del perfil define qué fechas forman tu período activo.</small></span></div>
     <div className="table-head"><span>Movimiento</span><span>Categoría</span><span>Cuenta</span><span>Fecha</span><span>Monto</span></div>
     <TransactionList transactions={transactions} detailed />
-    {!transactions.length && <div className="empty-state"><span><Icon name="activity" size={24} /></span><h3>No hay movimientos para mostrar</h3><p>Registra un ingreso o gasto para comenzar tu historial.</p></div>}
+    {!transactions.length && <div className="empty-state"><span><Icon name="activity" size={24} /></span><h3>No hay movimientos para mostrar</h3><p>Prueba cambiando el período o registra un nuevo ingreso o gasto.</p></div>}
   </section>;
 }
 
-function BudgetView({ data, openModal }) {
+function BudgetView({ data, openModal, goTo }) {
   const { money } = useMoney();
-  const used = data.categories.reduce((total, category) => total + category.spent, 0);
-  const assigned = data.categories.reduce((total, category) => total + category.monthlyLimit, 0);
+  const plan = data.budgetPlan || EMPTY_DATA.budgetPlan;
+  const assigned = Number(plan.assigned || data.summary.budgetTotal || 0);
+  const used = Number(plan.spent || data.summary.budgetSpent || 0);
+  const periodWord = data.period?.mode === "biweekly" ? "quincena" : "mes";
+  const safeUntilLabel = plan.safeUntil ? prettyDate(plan.safeUntil) : `fin de ${periodWord}`;
+  const roots = data.categories.filter((category) => !category.parentId);
+
   return <>
+    <section className="safe-spend-hero">
+      <div className="safe-spend-main">
+        <span className="safe-spend-icon"><Icon name="shield" size={22} /></span>
+        <div>
+          <p className="eyebrow light">Dinero seguro para gastar</p>
+          <h2>{money(plan.safeToSpend || 0)}</h2>
+          <p>Estimación disponible hasta {safeUntilLabel}, después de proteger compromisos fijos y tu reserva de ahorro configurada.</p>
+        </div>
+      </div>
+      <div className="safe-spend-daily">
+        <small>Ritmo diario sugerido</small>
+        <strong>{money(plan.dailySafeToSpend || 0)}</strong>
+        <span>por día · {plan.daysForSafeSpend || 1} día{Number(plan.daysForSafeSpend || 1) === 1 ? "" : "s"}</span>
+      </div>
+      <div className="safe-spend-breakdown">
+        <span><Icon name="wallet" size={15} /><small>Dinero líquido</small><strong>{money(plan.liquidBalance || 0)}</strong></span>
+        <span><Icon name="calendar" size={15} /><small>Compromisos protegidos</small><strong>{money(plan.fixedReserve || 0)}</strong></span>
+        <span><Icon name="target" size={15} /><small>Reserva de ahorro</small><strong>{money(plan.savingsReserve || 0)}</strong></span>
+      </div>
+      {plan.usingProfileFixedFallback && <p className="safe-spend-note"><Icon name="info" size={14} /> Clara está usando los gastos fijos aproximados de tu perfil. Marca sobres como “Compromiso fijo” para que este cálculo sea más preciso.</p>}
+      <p className="safe-spend-disclaimer">Es una estimación basada en lo que has registrado en Clara; no incluye cargos o pagos que todavía no estén configurados.</p>
+    </section>
+
     <section className="budget-overview">
       <div>
-        <p className="eyebrow light">Presupuesto de {monthName()}</p>
-        <h2>{money(data.summary.budgetAvailable)} <span>todavía disponibles</span></h2>
-        <p>{assigned ? `Has usado ${money(used)} de los ${money(assigned)} que planeaste para este mes.` : "Aún no has definido límites para este mes."}</p>
+        <p className="eyebrow light">Presupuesto · {data.period?.label || monthName()}</p>
+        <h2>{money(Math.max(assigned - used, 0))} <span>todavía disponibles en tus sobres</span></h2>
+        <p>{assigned ? `Has utilizado ${money(used)} de ${money(assigned)} planificados para esta ${periodWord}.` : `Aún no has creado sobres para esta ${periodWord}. Puedes empezar categoría por categoría o copiar tu plan anterior.`}</p>
       </div>
       <div className="budget-ring" style={{ "--progress": `${percentage(used, assigned) * 3.6}deg` }}>
         <span><strong>{percentage(used, assigned)}%</strong><small>utilizado</small></span>
       </div>
       <div className="overview-metrics">
-        <span><small>Ingresos</small><strong>{money(data.summary.monthlyIncome)}</strong></span>
+        <span><small>Ingreso de referencia</small><strong>{money(plan.incomeReference || data.summary.periodIncome || 0)}</strong></span>
         <span><small>Asignado</small><strong>{money(assigned)}</strong></span>
-        <span><small>Sin asignar</small><strong>{money(Math.max(data.summary.monthlyIncome - assigned, 0))}</strong></span>
+        <span><small>Sin asignar</small><strong>{money(plan.unassigned || 0)}</strong></span>
       </div>
     </section>
-    <section className="page-card">
-      <div className="page-intro compact-intro"><div><p className="eyebrow">Tus categorías</p><h2>¿Cuánto hay para cada cosa?</h2><p>Ajusta los límites hasta que tu plan se sienta realista.</p></div></div>
-      <div className="budget-grid">
-        {data.categories.map((category) => <BudgetRow key={category.id} category={category} onEdit={() => openModal("budget", category.id)} />)}
+
+    {plan.alerts?.length > 0 && <section className="budget-alert-center">
+      <div className="budget-alert-heading">
+        <span className="alert-center-icon"><Icon name="pulse" size={18} /></span>
+        <div><p className="eyebrow">Alertas del período</p><h2>Hay sobres que necesitan atención</h2></div>
+        <strong>{plan.alerts.length}</strong>
       </div>
+      <div className="budget-alert-list">
+        {plan.alerts.slice(0, 6).map((alert) => <button key={`${alert.categoryId}-${alert.parentId || 0}`} className={`budget-alert ${alert.level}`} onClick={() => openModal("budget", alert.categoryId)}>
+          <span><strong>{alert.name}</strong><small>{alert.percentage >= 100 ? "Superaste el límite" : alert.percentage >= 90 ? "Muy cerca del límite" : "Ya usaste más del 70%"}</small></span>
+          <span><b>{alert.percentage}%</b><small>{money(alert.remaining)} restantes</small></span>
+        </button>)}
+      </div>
+    </section>}
+
+    <section className="page-card">
+      <div className="page-intro compact-intro budget-plan-heading">
+        <div><p className="eyebrow">Sobres del período</p><h2>Decide qué trabajo hará cada peso</h2><p>Cada sobre pertenece exclusivamente a <strong>{data.period?.label || "este período"}</strong>. Puedes marcarlo como compromiso fijo, gasto flexible o reserva de ahorro.</p></div>
+        <div className="split-actions">
+          <button className="secondary-action" onClick={() => openModal("budget-copy")}><Icon name="refresh" size={15} /> Usar plan anterior</button>
+          <button className="secondary-action" onClick={() => goTo("categorias")}><Icon name="tags" size={15} /> Categorías</button>
+        </div>
+      </div>
+      {plan.legacyEnvelopes > 0 && <div className="period-context-banner budget-migration-banner"><Icon name="info" size={15} /><span><strong>Plan heredado de Clara 3.0</strong><small>{plan.legacyEnvelopes} límite{plan.legacyEnvelopes === 1 ? "" : "s"} se está usando como referencia. Al editar cada sobre quedará guardado específicamente para esta {periodWord}.</small></span></div>}
+      <div className="budget-grid">
+        {roots.map((category) => {
+          const children = data.categories.filter((child) => child.parentId === category.id);
+          return <div className="budget-envelope-group" key={category.id}>
+            <BudgetRow category={category} onEdit={() => openModal("budget", category.id)} />
+            {children.length > 0 && <div className="budget-subenvelopes">
+              {children.map((child) => <BudgetRow key={child.id} category={child} compact onEdit={() => openModal("budget", child.id)} />)}
+            </div>}
+          </div>;
+        })}
+      </div>
+      {!roots.length && <div className="empty-state"><span><Icon name="budget" size={24} /></span><h3>Crea tu primera categoría</h3><p>Después podrás asignarle un sobre para este período.</p></div>}
     </section>
   </>;
+}
+
+function CategoriesView({ data, openModal }) {
+  const roots = data.categories.filter((category) => !category.parentId);
+  const customCount = data.categories.filter((category) => !category.isSystem).length;
+  return <section className="page-card category-manager">
+    <div className="page-intro">
+      <div><p className="eyebrow">Organización personal</p><h2>Categorías y subcategorías</h2><p>Usa las categorías base de Clara o crea las tuyas. Cada perfil mantiene su propia organización.</p></div>
+      <button className="primary-action" onClick={() => openModal("category")}><Icon name="plus" size={15} /> Nueva categoría</button>
+    </div>
+    <div className="category-summary-strip">
+      <span><Icon name="layers" size={17} /><small>Categorías visibles</small><strong>{data.categories.length}</strong></span>
+      <span><Icon name="user" size={17} /><small>Creadas por ti</small><strong>{customCount}</strong></span>
+      <span><Icon name="shield" size={17} /><small>Base Clara</small><strong>{data.categories.filter((category) => category.isSystem).length}</strong></span>
+    </div>
+    <div className="category-groups">
+      {roots.map((category) => {
+        const children = data.categories.filter((child) => child.parentId === category.id);
+        return <article className="category-group-card" key={category.id}>
+          <div className="category-group-head">
+            <span className={`category-symbol ${category.color}`}>{category.symbol}</span>
+            <div><strong>{category.name}</strong><small>{category.isSystem ? "Categoría base de Clara" : "Categoría personalizada"}</small></div>
+            <div className="category-actions">
+              <button onClick={() => openModal("category", category.id)} title="Crear subcategoría"><Icon name="plus" size={14} /></button>
+              {!category.isSystem && <button onClick={() => openModal("category-update", category.id)} title="Editar"><Icon name="edit" size={14} /></button>}
+              {!category.isSystem && <button className="danger-icon" onClick={() => openModal("category-delete", category.id)} title="Eliminar"><Icon name="trash" size={14} /></button>}
+            </div>
+          </div>
+          <div className="subcategory-list">
+            {children.map((child) => <div className="subcategory-row" key={child.id}>
+              <span className={`subcategory-dot ${child.color}`} />
+              <span><strong>{child.name}</strong><small>Dentro de {category.name}</small></span>
+              <div className="category-actions">
+                {!child.isSystem && <button onClick={() => openModal("category-update", child.id)} title="Editar"><Icon name="edit" size={13} /></button>}
+                {!child.isSystem && <button className="danger-icon" onClick={() => openModal("category-delete", child.id)} title="Eliminar"><Icon name="trash" size={13} /></button>}
+              </div>
+            </div>)}
+            {!children.length && <button className="subcategory-empty" onClick={() => openModal("category", category.id)}><Icon name="plus" size={13} /> Añadir subcategoría</button>}
+          </div>
+        </article>;
+      })}
+    </div>
+    {!roots.length && <div className="empty-state"><span><Icon name="tags" size={24} /></span><h3>Empieza creando una categoría</h3><p>Podrás usarla inmediatamente al registrar gastos.</p></div>}
+  </section>;
 }
 
 function GoalsView({ data, openModal }) {
@@ -1191,14 +1395,23 @@ function GoalsView({ data, openModal }) {
 }
 
 function AccountsView({ data, openModal, showBalance }) {
-  const { money, currencySymbol } = useMoney();
+  const { money, moneyFor, currencySymbol, currencyCode } = useMoney();
+  const totals = Object.entries(data.summary.currencyTotals || {});
   return <>
     <section className="account-overview-card premium-account-overview">
-      <div><p className="eyebrow light">Patrimonio combinado</p><strong>{showBalance ? money(data.summary.totalBalance) : `${currencySymbol} ••••••`}</strong><p>La suma de todas las cuentas de tu perfil.</p></div>
+      <div>
+        <p className="eyebrow light">{data.summary.hasMixedCurrencies ? `Patrimonio principal · ${currencyCode}` : "Patrimonio combinado"}</p>
+        <strong>{showBalance ? money(data.summary.primaryBalance ?? data.summary.totalBalance) : `${currencySymbol} ••••••`}</strong>
+        <p>{data.summary.hasMixedCurrencies ? "Clara no suma monedas diferentes sin una tasa de cambio. Cada moneda se mantiene separada." : "La suma de todas las cuentas activas de tu perfil."}</p>
+        {data.summary.hasMixedCurrencies && <div className="account-currency-totals">
+          {totals.map(([code, amount]) => <span key={code}><small>{code}</small><strong>{showBalance ? moneyFor(amount, code) : "••••"}</strong></span>)}
+        </div>}
+      </div>
       <div className="account-overview-actions"><button onClick={() => openModal("transfer")}><Icon name="transfer" size={15} /> Transferir</button><button onClick={() => openModal("account")}><Icon name="plus" size={15} /> Añadir cuenta</button></div>
     </section>
     <section className="page-card elevated-card">
-      <div className="page-intro compact-intro"><div><p className="eyebrow">Saldos separados</p><h2>Mis cuentas</h2><p>Agrega las cuentas que realmente usas y mantén cada saldo bajo tu control.</p></div></div>
+      <div className="page-intro compact-intro"><div><p className="eyebrow">Saldos separados</p><h2>Mis cuentas</h2><p>Cada cuenta conserva su institución, moneda y trazabilidad de saldo.</p></div></div>
+      <div className="cash-engine-note"><span><Icon name="wallet" size={17} /></span><div><strong>El efectivo también es una cuenta.</strong><p>Si retiras dinero del banco, usa Transferir hacia Efectivo. Tu patrimonio no cambia; solo cambia dónde está el dinero.</p></div></div>
       <div className="accounts-grid">
         {data.accounts.map((account) => <article className={`account-card ${account.color}`} key={account.id}>
           <div className="account-card-top">
@@ -1211,11 +1424,14 @@ function AccountsView({ data, openModal, showBalance }) {
           </div>
           <div className="account-institution-chip"><Icon name={account.institutionType === "cooperative" ? "users" : account.kind === "cash" ? "wallet" : "building"} size={12} /> {account.institutionName || institutionTypeLabel(account.institutionType || (account.kind === "cash" ? "cash" : "bank"))}</div>
           <h3>{account.name}</h3>
-          <p className="account-subtitle">{accountSubtitle(account)}</p>
-          <strong>{showBalance ? money(account.balance) : "••••••"}</strong>
-          <div className="account-card-foot"><span>Saldo editable y auditado</span><button onClick={() => openModal("transfer")}>Mover dinero <Icon name="chevronRight" size={13} /></button></div>
+          <p className="account-subtitle">{accountSubtitle(account)} · {account.currencyCode}</p>
+          <strong>{showBalance ? moneyFor(account.balance, account.currencyCode) : "••••••"}</strong>
+          <div className="account-card-foot account-card-foot-dual">
+            <button onClick={() => openModal("account-history", account.id)}><Icon name="history" size={13} /> Historial</button>
+            <button onClick={() => openModal("transfer")}>Mover dinero <Icon name="chevronRight" size={13} /></button>
+          </div>
         </article>)}
-        <button className="account-card account-add" onClick={() => openModal("account")}><span><Icon name="plus" size={24} /></span><strong>Añadir otra cuenta</strong><small>Bancos, cooperativas, nómina, inversiones, efectivo y más.</small></button>
+        <button className="account-card account-add" onClick={() => openModal("account")}><span><Icon name="plus" size={24} /></span><strong>Añadir otra cuenta</strong><small>Bancos, cooperativas, nómina, inversiones, efectivo y múltiples monedas.</small></button>
       </div>
     </section>
   </>;
@@ -1223,16 +1439,26 @@ function AccountsView({ data, openModal, showBalance }) {
 
 function BudgetRow({ category, onEdit, compact = false }) {
   const { money } = useMoney();
-  const used = percentage(category.spent, category.monthlyLimit);
-  const remaining = Math.max(category.monthlyLimit - category.spent, 0);
-  return <article className={compact ? "budget-item compact" : "budget-item"}>
+  const limit = Number(category.periodLimit ?? category.monthlyLimit ?? 0);
+  const spent = Number(category.spent || 0);
+  const used = limit > 0 ? Number(category.percentage ?? percentage(spent, limit)) : 0;
+  const remaining = Math.max(limit - spent, 0);
+  const level = category.alertLevel || (used >= 100 ? "exceeded" : used >= 90 ? "warning" : used >= 70 ? "watch" : "ok");
+  const kindLabel = category.budgetKindLabel || (category.budgetKind === "fixed" ? "Compromiso fijo" : category.budgetKind === "savings" ? "Reserva de ahorro" : "Gasto flexible");
+  return <article className={`${compact ? "budget-item compact" : "budget-item"} ${category.parentId ? "subcategory-budget" : ""} budget-${level}`}>
     <div className="budget-item-top">
       <span className={`category-symbol ${category.color}`}>{category.symbol}</span>
-      <span><strong>{category.name}</strong><small>{money(remaining)} disponibles</small></span>
+      <span><strong>{category.parentId ? `${category.parentDisplayName || "Categoría"} › ${category.name}` : category.name}</strong><small>{limit > 0 ? `${money(remaining)} disponibles` : "Sin límite todavía"}</small></span>
       <button onClick={onEdit} aria-label={`Ajustar presupuesto de ${category.name}`}>{compact ? <Icon name="edit" size={14} /> : <>Ajustar <Icon name="edit" size={13} /></>}</button>
     </div>
+    <div className="budget-badges">
+      {limit > 0 && <span className={`budget-kind ${category.budgetKind || "flexible"}`}>{kindLabel}</span>}
+      {category.budgetIsLegacy && <span className="budget-legacy-badge">Plan anterior</span>}
+      {used >= 70 && <span className={`budget-threshold ${level}`}>{used >= 100 ? "Límite superado" : `${used}% utilizado`}</span>}
+    </div>
     <Progress value={used} color={category.color} />
-    <div className="budget-item-meta"><span>{money(category.spent)} usado</span><span>{money(category.monthlyLimit)} límite</span></div>
+    <div className="budget-item-meta"><span>{money(spent)} usado</span><span>{money(limit)} límite del período</span></div>
+    {category.budgetNote && <p className="budget-item-note"><Icon name="info" size={12} /> {category.budgetNote}</p>}
   </article>;
 }
 
@@ -1240,34 +1466,60 @@ function Progress({ value, color }) {
   return <span className="progress-track" aria-label={`${value}% completado`}><i className={color} style={{ width: `${Math.min(value, 100)}%` }} /></span>;
 }
 
+function sourceLabel(source) {
+  return {
+    MANUAL: "Manual",
+    ASSISTANT: "Clara Assistant",
+    EMAIL: "Clara Mail",
+    IMPORT: "Importado",
+    BANK_API: "Bank Connect",
+  }[String(source || "MANUAL").toUpperCase()] || "Manual";
+}
+
 function TransactionList({ transactions, detailed = false }) {
-  const { money } = useMoney();
+  const { moneyFor } = useMoney();
   if (!transactions.length && !detailed) {
     return <div className="mini-empty"><span><Icon name="activity" size={20} /></span><p>Aún no hay movimientos. Registra tu primer ingreso para comenzar.</p></div>;
   }
   return <div className={detailed ? "transaction-list detailed" : "transaction-list"}>
-    {transactions.map((transaction) => <article className="transaction-row" key={transaction.id}>
-      <div className="transaction-main">
-        <span className={`transaction-symbol ${transaction.type === "income" ? "mint" : transaction.type === "transfer" ? "sky" : transaction.categoryColor ?? "coral"}`}>{transaction.type === "income" ? "IN" : transaction.type === "transfer" ? "TR" : transaction.categorySymbol ?? "GA"}</span>
-        <span><strong>{transaction.description}</strong><small>{detailed ? transaction.note || "Sin nota" : `${transaction.accountName} · ${prettyDate(transaction.transactionDate)}`}</small></span>
-      </div>
-      {detailed && <span className="transaction-category">{transaction.type === "income" ? "Ingreso" : transaction.type === "transfer" ? "Transferencia" : transaction.categoryName ?? "Sin categoría"}</span>}
-      {detailed && <span className="transaction-account">{transaction.accountName}</span>}
-      {detailed && <span className="transaction-date">{prettyDate(transaction.transactionDate)}</span>}
-      <strong className={`transaction-amount ${transaction.type}`}>{transaction.type === "income" ? "+" : transaction.type === "expense" ? "−" : ""}{money(transaction.amount)}</strong>
-    </article>)}
+    {transactions.map((transaction) => {
+      const categoryLabel = transaction.type === "income"
+        ? "Ingreso"
+        : transaction.type === "transfer"
+          ? "Transferencia"
+          : transaction.parentCategoryName
+            ? `${transaction.parentCategoryName} › ${transaction.categoryName}`
+            : transaction.categoryName ?? "Sin categoría";
+      const amountText = moneyFor(transaction.amount, transaction.currencyCode);
+      const destinationText = transaction.type === "transfer" && transaction.destinationAmount && transaction.destinationCurrencyCode && transaction.destinationCurrencyCode !== transaction.currencyCode
+        ? ` → ${moneyFor(transaction.destinationAmount, transaction.destinationCurrencyCode)}`
+        : "";
+      return <article className="transaction-row" key={transaction.id}>
+        <div className="transaction-main">
+          <span className={`transaction-symbol ${transaction.type === "income" ? "mint" : transaction.type === "transfer" ? "sky" : transaction.categoryColor ?? "coral"}`}>{transaction.type === "income" ? "IN" : transaction.type === "transfer" ? "TR" : transaction.categorySymbol ?? "GA"}</span>
+          <span>
+            <strong>{transaction.description}</strong>
+            <small>{detailed ? <>{transaction.note || "Sin nota"} <i className="source-chip">{sourceLabel(transaction.source)}</i></> : `${transaction.accountName} · ${prettyDate(transaction.transactionDate)}`}</small>
+          </span>
+        </div>
+        {detailed && <span className="transaction-category">{categoryLabel}</span>}
+        {detailed && <span className="transaction-account">{transaction.accountName}{transaction.destinationAccountName ? ` → ${transaction.destinationAccountName}` : ""}</span>}
+        {detailed && <span className="transaction-date">{prettyDate(transaction.transactionDate)}</span>}
+        <strong className={`transaction-amount ${transaction.type}`}>{transaction.type === "income" ? "+" : transaction.type === "expense" ? "−" : ""}{amountText}{destinationText}</strong>
+      </article>;
+    })}
   </div>;
 }
 
 
-function AccountFields({ account = null }) {
-  const { currencySymbol } = useMoney();
+function AccountFields({ account = null, userCurrencyCode = "DOP" }) {
   const inferredType = account?.institutionType || (account?.kind === "cash" ? "cash" : "bank");
   const inferredProduct = account?.productType || (account?.kind === "cash" ? "cash" : account?.kind === "savings" ? "savings" : "checking");
   const [institutionType, setInstitutionType] = useState(inferredType);
   const [institutionName, setInstitutionName] = useState(account?.institutionName || "");
   const [productType, setProductType] = useState(inferredProduct);
   const [nickname, setNickname] = useState(account?.nickname || "");
+  const [accountCurrency, setAccountCurrency] = useState(account?.currencyCode || userCurrencyCode || "DOP");
   const institutions = institutionsForType(institutionType);
   const isCash = institutionType === "cash" || productType === "cash";
   const displayName = isCash
@@ -1290,7 +1542,7 @@ function AccountFields({ account = null }) {
   return <>
     <div className="account-editor-intro">
       <span><Icon name={institutionType === "cooperative" ? "users" : institutionType === "cash" ? "wallet" : "building"} size={20} /></span>
-      <div><strong>{displayName}</strong><small>Clara genera el nombre con el tipo de producto y la institución para que tus cuentas se entiendan de un vistazo.</small></div>
+      <div><strong>{displayName}</strong><small>Clara combina el producto, la institución y la moneda para que cada cuenta sea fácil de identificar.</small></div>
     </div>
     <input type="hidden" name="name" value={displayName} />
     <div className="form-grid">
@@ -1326,65 +1578,174 @@ function AccountFields({ account = null }) {
         placeholder={institutionType === "cooperative" ? "Busca o escribe tu cooperativa" : "Busca o escribe la institución"}
       />
       <datalist id="clara-institution-options">{institutions.map((institution) => <option value={institution} key={institution} />)}</datalist>
-      <small className="field-help">Puedes escoger una sugerencia o escribir cualquier banco, cooperativa o institución que no aparezca en la lista.</small>
+      <small className="field-help">Puedes escoger una sugerencia o escribir cualquier banco, cooperativa o institución que no aparezca.</small>
     </label>}
-    <label><span>Alias <small>opcional</small></span><input name="nickname" value={nickname} onChange={(event) => setNickname(event.target.value)} placeholder="Ej. Nómina, Personal, Viajes" /></label>
-    <label><span>{account ? "Saldo actual" : "Saldo que tienes ahora"}</span><div className="money-field"><span>{currencySymbol}</span><input type="number" name="amount" min="0" step="0.01" defaultValue={account ? (Number(account.balance || 0) / 100).toFixed(2) : "0.00"} required /></div></label>
+    <div className="form-grid">
+      <label><span>Alias <small>opcional</small></span><input name="nickname" value={nickname} onChange={(event) => setNickname(event.target.value)} placeholder="Ej. Nómina, Personal, Viajes" /></label>
+      <label><span>Moneda de esta cuenta</span><select name="currencyCode" value={accountCurrency} onChange={(event) => setAccountCurrency(event.target.value)}>
+        {currencyOptions.map((currency) => <option key={currency.code} value={currency.code}>{currency.label} ({currency.code})</option>)}
+      </select></label>
+    </div>
+    <label><span>{account ? "Saldo actual" : "Saldo que tienes ahora"}</span><div className="money-field"><span>{currencyInfo(accountCurrency).symbol}</span><input type="number" name="amount" min="0" step="0.01" defaultValue={account ? (Number(account.balance || 0) / 100).toFixed(2) : "0.00"} required /></div></label>
     {account ? <>
       <label><span>Motivo del ajuste <small>opcional</small></span><input name="balanceReason" placeholder="Ej. Actualicé el saldo con mi app bancaria" /></label>
-      <p className="form-note"><Icon name="shield" size={14} /> Puedes corregir el saldo aunque la cuenta tenga movimientos. Clara guarda el ajuste aparte para no contarlo como ingreso ni como gasto.</p>
-    </> : <p className="form-note"><Icon name="info" size={14} /> Este es tu saldo de partida. Puedes poner lo que ya tienes en el banco sin registrar un ingreso ficticio.</p>}
+      <p className="form-note"><Icon name="shield" size={14} /> Puedes corregir el saldo sin crear un ingreso ficticio. Si la cuenta ya tiene movimientos, Clara protege su moneda para no dañar el historial.</p>
+    </> : <p className="form-note"><Icon name="info" size={14} /> Este es tu saldo de partida. No se contará como ingreso y quedará registrado como saldo inicial.</p>}
+  </>;
+}
+
+function CategoryFields({ data, category = null, suggestedParentId = null }) {
+  const [parentId, setParentId] = useState(category?.parentId || suggestedParentId || "");
+  const roots = data.categories.filter((item) => !item.parentId && item.id !== category?.id);
+  return <>
+    <label><span>Nombre</span><input name="displayName" required autoFocus maxLength="150" defaultValue={category?.name || ""} placeholder="Ej. Mascotas, Iglesia, Negocio" /></label>
+    <label><span>¿Es una subcategoría?</span><select name="parentId" value={parentId} onChange={(event) => setParentId(event.target.value)}>
+      <option value="">No, será categoría principal</option>
+      {roots.map((item) => <option key={item.id} value={item.id}>Dentro de {item.name}</option>)}
+    </select></label>
+    <label><span>Color</span><select name="color" defaultValue={category?.color || "mint"}>
+      <option value="forest">Verde oscuro</option>
+      <option value="mint">Menta</option>
+      <option value="sky">Azul</option>
+      <option value="coral">Coral</option>
+      <option value="sun">Amarillo</option>
+      <option value="lilac">Lila</option>
+    </select></label>
+    <p className="form-note"><Icon name="tags" size={14} /> Las categorías que creas son privadas de tu perfil. Clara conserva las categorías base para mantener una estructura clara.</p>
+  </>;
+}
+
+function TransferFields({ data }) {
+  const { moneyFor } = useMoney();
+  const [sourceId, setSourceId] = useState(String(data.accounts[0]?.id || ""));
+  const [destinationId, setDestinationId] = useState(String(data.accounts[1]?.id || ""));
+  const source = data.accounts.find((item) => String(item.id) === sourceId);
+  const destination = data.accounts.find((item) => String(item.id) === destinationId);
+  const crossCurrency = source && destination && source.currencyCode !== destination.currencyCode;
+
+  return <>
+    <label><span>Desde</span><select name="accountId" required value={sourceId} onChange={(event) => setSourceId(event.target.value)}>
+      {data.accounts.map((item) => <option key={item.id} value={item.id}>{item.name} — {moneyFor(item.balance, item.currencyCode)}</option>)}
+    </select></label>
+    <label><span>Hacia</span><select name="destinationAccountId" required value={destinationId} onChange={(event) => setDestinationId(event.target.value)}>
+      {data.accounts.map((item) => <option key={item.id} value={item.id}>{item.name} — {item.currencyCode}</option>)}
+    </select></label>
+    <label><span>Monto que sale</span><div className="money-field"><span>{currencyInfo(source?.currencyCode || "DOP").symbol}</span><input type="number" name="amount" min="0.01" step="0.01" placeholder="0.00" required /></div></label>
+    {crossCurrency && <label><span>Monto que llegará en {destination.currencyCode}</span><div className="money-field"><span>{currencyInfo(destination.currencyCode).symbol}</span><input type="number" name="destinationAmount" min="0.01" step="0.01" placeholder="0.00" required /></div><small className="field-help">Clara no inventa tasas de cambio: escribe el monto real que recibirá la cuenta de destino.</small></label>}
+    <div className="form-grid"><label><span>Fecha</span><input type="date" name="transactionDate" defaultValue={todayIso()} required /></label><label><span>Nota <small>opcional</small></span><input name="note" placeholder="Motivo" /></label></div>
+    <p className="form-note"><Icon name="info" size={14} /> Transferir entre tus cuentas no crea un gasto. Si el destino es Efectivo, Clara lo interpreta como un retiro.</p>
+  </>;
+}
+
+function AccountHistory({ data, account }) {
+  const { moneyFor } = useMoney();
+  const rows = data.balanceHistory.filter((item) => item.accountId === account.id).slice(0, 60);
+  return <div className="account-history">
+    <div className="history-balance-card">
+      <span><small>Saldo actual</small><strong>{moneyFor(account.balance, account.currencyCode)}</strong></span>
+      <span><small>Moneda</small><strong>{account.currencyCode}</strong></span>
+      <span><small>Registros</small><strong>{rows.length}</strong></span>
+    </div>
+    <div className="history-list">
+      {rows.map((item) => <article key={item.id}>
+        <span className={`history-icon ${item.type}`}><Icon name={item.type === "adjustment" ? "edit" : item.type.includes("transfer") ? "transfer" : item.type === "income" ? "plus" : "minus"} size={14} /></span>
+        <div><strong>{item.description}</strong><small>{prettyDate(item.date)} · {sourceLabel(item.source)}</small></div>
+        <div className="history-numbers">
+          <strong className={item.amount >= 0 ? "positive" : "negative"}>{item.amount >= 0 ? "+" : "−"}{moneyFor(Math.abs(item.amount), item.currencyCode)}</strong>
+          <small>{item.balanceAfter === null ? "Saldo histórico no disponible" : `Quedó en ${moneyFor(item.balanceAfter, item.currencyCode)}`}</small>
+        </div>
+      </article>)}
+      {!rows.length && <div className="mini-empty"><span><Icon name="history" size={20} /></span><p>Aún no hay cambios registrados en esta cuenta.</p></div>}
+    </div>
+  </div>;
+}
+
+function TransactionFields({ kind, data }) {
+  const { moneyFor } = useMoney();
+  const [accountId, setAccountId] = useState(String(data.accounts[0]?.id || ""));
+  const account = data.accounts.find((item) => String(item.id) === accountId);
+  const roots = data.categories.filter((category) => !category.parentId);
+  return <>
+    <label><span>Concepto</span><input name="description" required autoFocus placeholder={kind === "expense" ? "Ej. Supermercado" : "Ej. Pago de nómina"} /></label>
+    <label><span>Monto</span><div className="money-field"><span>{currencyInfo(account?.currencyCode || "DOP").symbol}</span><input type="number" name="amount" min="0.01" step="0.01" placeholder="0.00" required /></div></label>
+    <label><span>Cuenta</span><select name="accountId" required value={accountId} onChange={(event) => setAccountId(event.target.value)}>
+      {data.accounts.map((item) => <option key={item.id} value={item.id}>{item.name} — {moneyFor(item.balance, item.currencyCode)}</option>)}
+    </select></label>
+    {kind === "expense" && <label><span>Categoría</span><select name="categoryId" required defaultValue={data.categories[0]?.id || ""}>
+      {roots.map((root) => <optgroup key={root.id} label={root.name}>
+        <option value={root.id}>{root.name}</option>
+        {data.categories.filter((child) => child.parentId === root.id).map((child) => <option key={child.id} value={child.id}>↳ {child.name}</option>)}
+      </optgroup>)}
+    </select></label>}
+    <div className="form-grid"><label><span>Fecha</span><input type="date" name="transactionDate" defaultValue={todayIso()} required /></label><label><span>Nota <small>opcional</small></span><input name="note" placeholder="Añade un detalle" /></label></div>
+    <input type="hidden" name="source" value="MANUAL" />
+    <p className="form-note"><Icon name="shield" size={14} /> Este movimiento quedará marcado como Manual. Clara 3.0 ya está preparada para Assistant, Email, Importación y Bank Connect sin mezclar los orígenes.</p>
   </>;
 }
 
 function OperationModal({ modal, data, saving, error, user, onClose, onSubmit }) {
-  const { money, currencySymbol } = useMoney();
+  const { money, moneyFor, currencySymbol } = useMoney();
   const category = data.categories.find((item) => item.id === modal.referenceId);
   const goal = data.goals.find((item) => item.id === modal.referenceId);
   const account = data.accounts.find((item) => item.id === modal.referenceId);
+  const suggestedParent = modal.kind === "category" && modal.referenceId ? data.categories.find((item) => item.id === modal.referenceId) : null;
   const titles = {
     expense: { eyebrow: "Nuevo movimiento", title: "Registrar gasto", submit: "Guardar gasto" },
     income: { eyebrow: "Nuevo movimiento", title: "Registrar ingreso", submit: "Guardar ingreso" },
     transfer: { eyebrow: "Entre tus cuentas", title: "Hacer transferencia", submit: "Transferir dinero" },
-    budget: { eyebrow: "Plan mensual", title: `Ajustar ${category?.name ?? "categoría"}`, submit: "Guardar presupuesto" },
+    budget: { eyebrow: "Sobre del período", title: `Ajustar ${category?.name ?? "categoría"}`, submit: "Guardar sobre" },
+    "budget-copy": { eyebrow: "Plan rápido", title: "Usar el plan anterior", submit: "Copiar plan" },
     goal: { eyebrow: "Ahorro con destino", title: "Crear nueva meta", submit: "Crear meta" },
     "goal-contribution": { eyebrow: "Avanza un poco más", title: `Aportar a ${goal?.name ?? "la meta"}`, submit: "Guardar aporte" },
     account: { eyebrow: "Nueva cuenta", title: "Añadir cuenta", submit: "Crear cuenta" },
     "account-update": { eyebrow: "Editar cuenta", title: account?.name ?? "Editar cuenta", submit: "Guardar cambios" },
     "account-delete": { eyebrow: "Eliminar cuenta", title: account?.name ?? "Eliminar cuenta", submit: "Eliminar cuenta", danger: true },
+    "account-history": { eyebrow: "Trazabilidad del saldo", title: account?.name ?? "Historial de cuenta", submit: "Cerrar" },
+    category: { eyebrow: suggestedParent ? "Nueva subcategoría" : "Nueva categoría", title: suggestedParent ? `Dentro de ${suggestedParent.name}` : "Crear categoría", submit: "Crear categoría" },
+    "category-update": { eyebrow: "Editar categoría", title: category?.name ?? "Editar categoría", submit: "Guardar categoría" },
+    "category-delete": { eyebrow: "Eliminar categoría", title: category?.name ?? "Eliminar categoría", submit: "Eliminar categoría", danger: true },
     "plan-purpose": { eyebrow: "Tu enfoque", title: "Propósito del período", submit: "Guardar propósito" },
   };
   const copy = titles[modal.kind] || titles.expense;
+  const isHistory = modal.kind === "account-history";
 
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
     if (event.target === event.currentTarget) onClose();
   }}>
-    <section className="modal-card premium-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <section className={`modal-card premium-modal ${isHistory ? "history-modal" : ""}`} role="dialog" aria-modal="true" aria-labelledby="modal-title">
       <button className="modal-close" onClick={onClose} aria-label="Cerrar"><Icon name="close" size={17} /></button>
       <p className="eyebrow">{copy.eyebrow}</p>
       <h2 id="modal-title">{copy.title}</h2>
-      <form onSubmit={onSubmit}>
-        {(modal.kind === "expense" || modal.kind === "income") && <>
-          <label><span>Concepto</span><input name="description" required autoFocus placeholder={modal.kind === "expense" ? "Ej. Supermercado" : "Ej. Pago de nómina"} /></label>
-          <MoneyInput />
-          <label><span>Cuenta</span><select name="accountId" required defaultValue={data.accounts[0]?.id}>{data.accounts.map((item) => <option key={item.id} value={item.id}>{item.name} — {money(item.balance)}</option>)}</select></label>
-          {modal.kind === "expense" && <label><span>Categoría</span><select name="categoryId" required defaultValue={data.categories[0]?.id}>{data.categories.map((item) => <option key={item.id} value={item.id}>{item.name} — quedan {money(Math.max(item.monthlyLimit - item.spent, 0))}</option>)}</select></label>}
-          <div className="form-grid"><label><span>Fecha</span><input type="date" name="transactionDate" defaultValue={todayIso()} required /></label><label><span>Nota <small>opcional</small></span><input name="note" placeholder="Añade un detalle" /></label></div>
-        </>}
 
-        {modal.kind === "transfer" && <>
-          <label><span>Desde</span><select name="accountId" required defaultValue={data.accounts[0]?.id}>{data.accounts.map((item) => <option key={item.id} value={item.id}>{item.name} — {money(item.balance)}</option>)}</select></label>
-          <label><span>Hacia</span><select name="destinationAccountId" required defaultValue={data.accounts[1]?.id}>{data.accounts.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          <MoneyInput />
-          <div className="form-grid"><label><span>Fecha</span><input type="date" name="transactionDate" defaultValue={todayIso()} required /></label><label><span>Nota <small>opcional</small></span><input name="note" placeholder="Motivo" /></label></div>
-          <p className="form-note"><Icon name="info" size={14} /> La transferencia mueve saldo entre tus cuentas sin registrarlo como gasto.</p>
-        </>}
+      {isHistory && account ? <>
+        <AccountHistory data={data} account={account} />
+        <div className="modal-actions"><button type="button" className="primary-action" onClick={onClose}>Cerrar historial</button></div>
+      </> : <form onSubmit={onSubmit}>
+        {(modal.kind === "expense" || modal.kind === "income") && <TransactionFields kind={modal.kind} data={data} />}
+
+        {modal.kind === "transfer" && <TransferFields data={data} />}
 
         {modal.kind === "budget" && <>
-          <div className="modal-context"><span className={`category-symbol ${category?.color ?? "mint"}`}>{category?.symbol ?? "CA"}</span><span><small>Actualmente</small><strong>{money(category?.monthlyLimit ?? 0)} al mes</strong></span></div>
-          <label><span>Nuevo límite mensual</span><div className="money-field"><span>{currencySymbol}</span><input type="number" name="monthlyLimit" min="0" step="0.01" defaultValue={((category?.monthlyLimit ?? 0) / 100).toFixed(2)} required autoFocus /></div></label>
-          <p className="form-note"><Icon name="info" size={14} /> Este cambio no modifica lo que ya gastaste; solo ajusta cuánto separas para la categoría.</p>
+          <div className="modal-context"><span className={`category-symbol ${category?.color ?? "mint"}`}>{category?.symbol ?? "CA"}</span><span><small>{data.period?.label || "Período actual"}</small><strong>{money(category?.periodLimit ?? 0)}</strong></span></div>
+          <label><span>Límite para este período</span><div className="money-field"><span>{currencySymbol}</span><input type="number" name="periodLimit" min="0" step="0.01" defaultValue={((category?.periodLimit ?? 0) / 100).toFixed(2)} required autoFocus /></div></label>
+          <label><span>¿Qué tipo de sobre es?</span><select name="budgetKind" defaultValue={category?.budgetKind || "flexible"}>
+            <option value="fixed">Compromiso fijo</option>
+            <option value="flexible">Gasto flexible</option>
+            <option value="savings">Reserva de ahorro</option>
+          </select></label>
+          <label><span>Nota <small>opcional</small></span><input name="budgetNote" maxLength="240" defaultValue={category?.budgetNote || ""} placeholder="Ej. Internet, renta o compras del supermercado" /></label>
+          <div className="budget-kind-explainer">
+            <span><Icon name="calendar" size={14} /><strong>Fijo</strong><small>Clara protege lo que todavía falta de este compromiso.</small></span>
+            <span><Icon name="wallet" size={14} /><strong>Flexible</strong><small>Sirve para controlar gastos sin tratarlos como obligación.</small></span>
+            <span><Icon name="target" size={14} /><strong>Ahorro</strong><small>Separa dinero que prefieres no gastar en este período.</small></span>
+          </div>
+          <p className="form-note"><Icon name="info" size={14} /> Este límite pertenece únicamente a {data.period?.label || "tu período actual"}. El próximo mes o quincena tendrá su propio plan.</p>
         </>}
+
+        {modal.kind === "budget-copy" && <div className="copy-budget-confirmation">
+          <span><Icon name="refresh" size={21} /></span>
+          <div><strong>¿Copiar el plan anterior?</strong><p>Clara traerá los sobres del período anterior a <b>{data.period?.label || "este período"}</b>. Si ya configuraste alguno aquí, se actualizará con el valor anterior.</p></div>
+        </div>}
 
         {modal.kind === "goal" && <>
           <label><span>Nombre de la meta</span><input name="name" required autoFocus placeholder="Ej. Fondo de emergencia" /></label>
@@ -1395,28 +1756,37 @@ function OperationModal({ modal, data, saving, error, user, onClose, onSubmit })
         {modal.kind === "goal-contribution" && <>
           <div className="modal-context goal-context"><span className="goal-round-icon"><Icon name="target" size={18} /></span><span><small>Faltan</small><strong>{money(Math.max((goal?.targetAmount ?? 0) - (goal?.currentAmount ?? 0), 0))}</strong></span></div>
           <MoneyInput label="Monto del aporte" />
-          <label><span>Tomar dinero de</span><select name="accountId" required defaultValue={data.accounts[0]?.id}>{data.accounts.map((item) => <option key={item.id} value={item.id}>{item.name} — {money(item.balance)}</option>)}</select></label>
-          <p className="form-note"><Icon name="info" size={14} /> El aporte se descontará de la cuenta elegida y quedará reservado dentro de la meta.</p>
+          <label><span>Tomar dinero de</span><select name="accountId" required defaultValue={data.accounts.find((item) => item.currencyCode === user?.currencyCode)?.id || ""}>
+            {data.accounts.filter((item) => item.currencyCode === user?.currencyCode).map((item) => <option key={item.id} value={item.id}>{item.name} — {moneyFor(item.balance, item.currencyCode)}</option>)}
+          </select></label>
+          <p className="form-note"><Icon name="info" size={14} /> Las metas actuales trabajan con tu moneda principal. El soporte de metas multimoneda se desarrollará en Clara 3.4.</p>
         </>}
 
-        {modal.kind === "account" && <AccountFields />}
+        {modal.kind === "account" && <AccountFields userCurrencyCode={user?.currencyCode} />}
 
-        {modal.kind === "account-update" && account && <AccountFields account={account} />}
+        {modal.kind === "account-update" && account && <AccountFields account={account} userCurrencyCode={user?.currencyCode} />}
 
         {modal.kind === "account-delete" && account && <div className="danger-confirmation">
           <span><Icon name="trash" size={20} /></span>
-          <div><strong>¿Eliminar esta cuenta?</strong><p>Debe estar en saldo 0. Si tiene movimientos, Clara la ocultará de tus cuentas activas y conservará el historial; si nunca tuvo movimientos, se eliminará definitivamente.</p></div>
+          <div><strong>¿Eliminar esta cuenta?</strong><p>Debe estar en saldo 0. Si tiene movimientos, Clara la archivará y conservará toda la trazabilidad financiera.</p></div>
+        </div>}
+
+        {modal.kind === "category" && <CategoryFields data={data} suggestedParentId={modal.referenceId} />}
+        {modal.kind === "category-update" && category && <CategoryFields data={data} category={category} />}
+        {modal.kind === "category-delete" && category && <div className="danger-confirmation">
+          <span><Icon name="trash" size={20} /></span>
+          <div><strong>¿Eliminar {category.name}?</strong><p>Si ya tiene movimientos, Clara la ocultará para nuevos registros pero conservará el historial anterior.</p></div>
         </div>}
 
         {modal.kind === "plan-purpose" && <>
           <label><span>¿Cómo quieres organizarte?</span><select name="planningPeriod" defaultValue={user?.profile?.planningPeriod || "monthly"}><option value="monthly">Por mes</option><option value="biweekly">Por quincena</option></select></label>
           <label><span>Propósito del período</span><textarea name="planPurpose" rows="4" maxLength="240" required autoFocus defaultValue={user?.profile?.planPurpose || ""} placeholder="Ej. Ahorrar para mi vehículo sin descuidar mis gastos fijos." /></label>
-          <p className="form-note"><Icon name="sparkles" size={14} /> Clara mostrará este propósito en tu inicio para mantener tu plan visible.</p>
+          <p className="form-note"><Icon name="calendar" size={14} /> Cambiar entre mensual y quincenal modifica inmediatamente el período activo que usa Clara para resumir tus movimientos.</p>
         </>}
 
         {error && <p className="form-error" role="alert">{error}</p>}
         <div className="modal-actions"><button type="button" className="secondary-action" onClick={onClose}>Cancelar</button><button type="submit" className={copy.danger ? "danger-action" : "primary-action"} disabled={saving}>{saving ? "Guardando…" : copy.submit}</button></div>
-      </form>
+      </form>}
     </section>
   </div>;
 }

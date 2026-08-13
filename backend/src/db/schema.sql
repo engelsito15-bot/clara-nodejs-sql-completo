@@ -96,6 +96,17 @@ CREATE TABLE IF NOT EXISTS budgets (
   PRIMARY KEY (user_id, category_id)
 );
 
+CREATE TABLE IF NOT EXISTS period_budgets (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+  period_key TEXT NOT NULL,
+  limit_amount INTEGER NOT NULL DEFAULT 0 CHECK (limit_amount >= 0),
+  budget_kind TEXT NOT NULL DEFAULT 'flexible' CHECK (budget_kind IN ('fixed', 'flexible', 'savings')),
+  note TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, category_id, period_key)
+);
+
 CREATE TABLE IF NOT EXISTS transactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

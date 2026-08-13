@@ -92,6 +92,16 @@ function ensureSqliteMultiUserSchema(database) {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (user_id, category_id)
     );
+    CREATE TABLE IF NOT EXISTS period_budgets (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+      period_key TEXT NOT NULL,
+      limit_amount INTEGER NOT NULL DEFAULT 0 CHECK (limit_amount >= 0),
+      budget_kind TEXT NOT NULL DEFAULT 'flexible' CHECK (budget_kind IN ('fixed', 'flexible', 'savings')),
+      note TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (user_id, category_id, period_key)
+    );
     CREATE TABLE IF NOT EXISTS account_balance_adjustments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -110,6 +120,7 @@ function ensureSqliteMultiUserSchema(database) {
     CREATE INDEX IF NOT EXISTS idx_transactions_user_period ON transactions(user_id, period_key);
     CREATE INDEX IF NOT EXISTS idx_goals_user_due_date ON goals(user_id, due_date);
     CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets(user_id);
+    CREATE INDEX IF NOT EXISTS idx_period_budgets_user_period ON period_budgets(user_id, period_key);
     CREATE INDEX IF NOT EXISTS idx_adjustments_user_account ON account_balance_adjustments(user_id, account_id);
     CREATE INDEX IF NOT EXISTS idx_categories_user_active ON categories(user_id, is_active);
     CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id);
@@ -341,6 +352,21 @@ async function ensureTidbMultiUserSchema(connection) {
     CONSTRAINT fk_budgets_category FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
   )`);
 
+  await connection.query(`CREATE TABLE IF NOT EXISTS period_budgets (
+    user_id BIGINT NOT NULL,
+    category_id BIGINT NOT NULL,
+    period_key VARCHAR(20) NOT NULL,
+    limit_amount BIGINT NOT NULL DEFAULT 0,
+    budget_kind VARCHAR(20) NOT NULL DEFAULT 'flexible',
+    note VARCHAR(240) NOT NULL DEFAULT '',
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, category_id, period_key),
+    CONSTRAINT chk_period_budgets_limit CHECK (limit_amount >= 0),
+    CONSTRAINT chk_period_budgets_kind CHECK (budget_kind IN ('fixed', 'flexible', 'savings')),
+    CONSTRAINT fk_period_budgets_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_period_budgets_category FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
+  )`);
+
   await connection.query(`CREATE TABLE IF NOT EXISTS account_balance_adjustments (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     user_id BIGINT NOT NULL,
@@ -393,6 +419,7 @@ async function ensureTidbMultiUserSchema(connection) {
     "CREATE INDEX IF NOT EXISTS idx_transactions_user_period ON transactions(user_id, period_key)",
     "CREATE INDEX IF NOT EXISTS idx_goals_user_due_date ON goals(user_id, due_date)",
     "CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_period_budgets_user_period ON period_budgets(user_id, period_key)",
     "CREATE INDEX IF NOT EXISTS idx_adjustments_user_account ON account_balance_adjustments(user_id, account_id)",
     "CREATE INDEX IF NOT EXISTS idx_categories_user_active ON categories(user_id, is_active)",
     "CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id)",

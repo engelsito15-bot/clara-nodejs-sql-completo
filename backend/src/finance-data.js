@@ -38,6 +38,7 @@ function currentPeriod(planningPeriod = "monthly") {
       label: `${startDay}–${endDay} de ${monthLabel}`,
       shortLabel: firstHalf ? "Primera quincena" : "Segunda quincena",
       days: endDay - startDay + 1,
+      today,
     };
   }
 
@@ -49,6 +50,7 @@ function currentPeriod(planningPeriod = "monthly") {
     label: monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1),
     shortLabel: "Mes actual",
     days: lastDay,
+    today,
   };
 }
 
@@ -64,10 +66,104 @@ function timestampText(value) {
   return String(value);
 }
 
+function utcDate(value) {
+  const [year, month, day] = String(value).slice(0, 10).split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day));
+}
+
+function daysBetween(start, end) {
+  return Math.max(0, Math.ceil((utcDate(end) - utcDate(start)) / 86400000));
+}
+
+function clampDay(year, month, requestedDay) {
+  return Math.min(Math.max(Number(requestedDay || 1), 1), daysInMonth(year, month));
+}
+
+function paydayDetails(profile, period) {
+  if (profile.incomeFrequency === "irregular") return null;
+  const today = period.today || isoToday();
+  const [year, month] = today.split("-").map(Number);
+  const candidates = [];
+
+  if (profile.incomeFrequency === "weekly") {
+    const next = new Date(utcDate(today));
+    next.setUTCDate(next.getUTCDate() + 7);
+    candidates.push(next.toISOString().slice(0, 10));
+  } else {
+    const configuredDays = [profile.paydayOne, profile.paydayTwo]
+      .map(Number)
+      .filter((day) => day >= 1 && day <= 31);
+    for (let offset = 0; offset <= 2; offset += 1) {
+      const candidateMonth = new Date(Date.UTC(year, month - 1 + offset, 1));
+      const candidateYear = candidateMonth.getUTCFullYear();
+      const candidateMonthNumber = candidateMonth.getUTCMonth() + 1;
+      for (const requestedDay of configuredDays) {
+        const day = clampDay(candidateYear, candidateMonthNumber, requestedDay);
+        const date = `${candidateYear}-${String(candidateMonthNumber).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+        if (date >= today) candidates.push(date);
+      }
+    }
+  }
+
+  candidates.sort();
+  const date = candidates[0];
+  if (!date) return null;
+  return { date, daysUntil: daysBetween(today, date) };
+}
+
+function expectedIncomeForPeriod(profile, period) {
+  const amount = normalizeNumber(profile.incomeAmount);
+  if (!amount) return 0;
+
+  if (period.mode === "monthly") {
+    if (profile.incomeFrequency === "weekly") return Math.round(amount * 4);
+    if (profile.incomeFrequency === "biweekly") return amount * 2;
+    return amount;
+  }
+
+  if (profile.incomeFrequency === "weekly") return amount * 2;
+  if (profile.incomeFrequency === "biweekly") return amount;
+  if (profile.incomeFrequency === "monthly") {
+    const payday = Number(profile.paydayOne);
+    if (!payday) return Math.round(amount / 2);
+    const startDay = Number(period.start.slice(8, 10));
+    const endDay = Number(period.end.slice(8, 10));
+    return payday >= startDay && payday <= endDay ? amount : 0;
+  }
+  return Math.round(amount / 2);
+}
+
+function alertLevel(percentage) {
+  if (percentage >= 100) return "exceeded";
+  if (percentage >= 90) return "warning";
+  if (percentage >= 70) return "watch";
+  return "ok";
+}
+
+function budgetKindLabel(kind) {
+  return {
+    fixed: "Compromiso fijo",
+    flexible: "Gasto flexible",
+    savings: "Reserva de ahorro",
+  }[kind] || "Gasto flexible";
+}
+
+function periodFixedExpenses(profile, period) {
+  const amount = normalizeNumber(profile.fixedExpenses);
+  return period.mode === "biweekly" ? Math.round(amount / 2) : amount;
+}
+
 export async function getFinanceData(database, userId) {
   const userSettings = await database.get(
     `SELECT u.currency_code AS currencyCode,
-      COALESCE(p.planning_period, 'monthly') AS planningPeriod
+      COALESCE(p.planning_period, 'monthly') AS planningPeriod,
+      COALESCE(p.income_type, '') AS incomeType,
+      COALESCE(p.income_frequency, '') AS incomeFrequency,
+      COALESCE(p.income_amount, 0) AS incomeAmount,
+      COALESCE(p.fixed_expenses, 0) AS fixedExpenses,
+      COALESCE(p.savings_target_percent, 10) AS savingsTargetPercent,
+      p.payday_one AS paydayOne,
+      p.payday_two AS paydayTwo
      FROM users u
      LEFT JOIN user_profiles p ON p.user_id = u.id
      WHERE u.id = ?`,
@@ -76,6 +172,15 @@ export async function getFinanceData(database, userId) {
   const primaryCurrency = String(userSettings?.currencyCode || "DOP").toUpperCase();
   const planningPeriod = userSettings?.planningPeriod === "biweekly" ? "biweekly" : "monthly";
   const period = currentPeriod(planningPeriod);
+  const profile = {
+    incomeType: userSettings?.incomeType || "",
+    incomeFrequency: userSettings?.incomeFrequency || "",
+    incomeAmount: normalizeNumber(userSettings?.incomeAmount),
+    fixedExpenses: normalizeNumber(userSettings?.fixedExpenses),
+    savingsTargetPercent: normalizeNumber(userSettings?.savingsTargetPercent),
+    paydayOne: userSettings?.paydayOne ?? null,
+    paydayTwo: userSettings?.paydayTwo ?? null,
+  };
 
   const accounts = await database.all(
     `SELECT id, name, kind, balance, color,
@@ -88,33 +193,46 @@ export async function getFinanceData(database, userId) {
     [primaryCurrency, userId],
   );
 
-  const categories = await database.all(
+  const categoryRows = await database.all(
     `SELECT c.id,
       COALESCE(NULLIF(c.display_name, ''), c.name) AS name,
       c.symbol,
-      COALESCE(b.monthly_limit, 0) AS monthlyLimit,
+      COALESCE(b.monthly_limit, 0) AS legacyMonthlyLimit,
       c.color,
       c.parent_id AS parentId,
-      parent.display_name AS parentDisplayName,
+      COALESCE(NULLIF(parent.display_name, ''), parent.name) AS parentDisplayName,
       c.user_id AS ownerUserId,
       COALESCE(c.is_system, 0) AS isSystem,
-      COALESCE(SUM(CASE
-        WHEN t.type = 'expense'
-         AND t.transaction_date BETWEEN ? AND ?
-         AND COALESCE(t.currency_code, ?) = ? THEN t.amount
-        ELSE 0
-      END), 0) AS spent
+      c.created_at AS createdAt
      FROM categories c
      LEFT JOIN categories parent ON parent.id = c.parent_id
      LEFT JOIN budgets b ON b.category_id = c.id AND b.user_id = ?
-     LEFT JOIN transactions t ON t.category_id = c.id AND t.user_id = ?
      WHERE COALESCE(c.is_active, 1) = 1
        AND (c.user_id IS NULL OR c.user_id = ?)
-     GROUP BY c.id, c.name, c.display_name, c.symbol, b.monthly_limit, c.color,
-       c.parent_id, parent.display_name, parent.name, c.user_id, c.is_system, c.created_at
      ORDER BY CASE WHEN c.parent_id IS NULL THEN 0 ELSE 1 END,
        COALESCE(c.parent_id, c.id), c.created_at, c.id`,
-    [period.start, period.end, primaryCurrency, primaryCurrency, userId, userId, userId],
+    [userId, userId],
+  );
+
+  const budgetRows = await database.all(
+    `SELECT category_id AS categoryId, limit_amount AS limitAmount,
+      COALESCE(budget_kind, 'flexible') AS budgetKind,
+      COALESCE(note, '') AS note
+     FROM period_budgets
+     WHERE user_id = ? AND period_key = ?`,
+    [userId, period.key],
+  );
+
+  const spendRows = await database.all(
+    `SELECT category_id AS categoryId, SUM(amount) AS spent
+     FROM transactions
+     WHERE user_id = ?
+       AND type = 'expense'
+       AND category_id IS NOT NULL
+       AND transaction_date BETWEEN ? AND ?
+       AND COALESCE(currency_code, ?) = ?
+     GROUP BY category_id`,
+    [userId, period.start, period.end, primaryCurrency, primaryCurrency],
   );
 
   const transactions = await database.all(
@@ -185,16 +303,56 @@ export async function getFinanceData(database, userId) {
     currencyCode: String(account.currencyCode || primaryCurrency).toUpperCase(),
   }));
 
-  const normalizedCategories = categories.map((category) => ({
-    ...category,
-    id: Number(category.id),
-    parentId: category.parentId ? Number(category.parentId) : null,
-    ownerUserId: category.ownerUserId ? Number(category.ownerUserId) : null,
-    isSystem: Boolean(Number(category.isSystem || 0)),
-    monthlyLimit: normalizeNumber(category.monthlyLimit),
-    periodLimit: planningPeriod === "biweekly" ? Math.round(normalizeNumber(category.monthlyLimit) / 2) : normalizeNumber(category.monthlyLimit),
-    spent: normalizeNumber(category.spent),
-  }));
+  const budgetMap = new Map(budgetRows.map((row) => [Number(row.categoryId), row]));
+  const spendMap = new Map(spendRows.map((row) => [Number(row.categoryId), normalizeNumber(row.spent)]));
+
+  let normalizedCategories = categoryRows.map((category) => {
+    const id = Number(category.id);
+    const legacyMonthlyLimit = normalizeNumber(category.legacyMonthlyLimit);
+    const legacyPeriodLimit = planningPeriod === "biweekly" ? Math.round(legacyMonthlyLimit / 2) : legacyMonthlyLimit;
+    const currentBudget = budgetMap.get(id);
+    const periodLimit = currentBudget ? normalizeNumber(currentBudget.limitAmount) : legacyPeriodLimit;
+    const directSpent = spendMap.get(id) || 0;
+    const budgetKind = currentBudget?.budgetKind || "flexible";
+    return {
+      ...category,
+      id,
+      parentId: category.parentId ? Number(category.parentId) : null,
+      ownerUserId: category.ownerUserId ? Number(category.ownerUserId) : null,
+      isSystem: Boolean(Number(category.isSystem || 0)),
+      monthlyLimit: legacyMonthlyLimit,
+      legacyMonthlyLimit,
+      periodLimit,
+      directSpent,
+      spent: directSpent,
+      remaining: Math.max(periodLimit - directSpent, 0),
+      percentage: periodLimit > 0 ? Math.round((directSpent / periodLimit) * 100) : 0,
+      budgetKind,
+      budgetKindLabel: budgetKindLabel(budgetKind),
+      budgetNote: currentBudget?.note || "",
+      hasPeriodBudget: Boolean(currentBudget),
+      budgetIsLegacy: !currentBudget && legacyPeriodLimit > 0,
+      alertLevel: periodLimit > 0 ? alertLevel(Math.round((directSpent / periodLimit) * 100)) : "ok",
+    };
+  });
+
+  // Una categoría principal incluye el gasto real de sus subcategorías. El límite
+  // del padre sigue siendo independiente para evitar sumar dos veces sobres anidados.
+  normalizedCategories = normalizedCategories.map((category) => {
+    if (category.parentId) return category;
+    const childSpent = normalizedCategories
+      .filter((child) => child.parentId === category.id)
+      .reduce((sum, child) => sum + child.directSpent, 0);
+    const spent = category.directSpent + childSpent;
+    const percentage = category.periodLimit > 0 ? Math.round((spent / category.periodLimit) * 100) : 0;
+    return {
+      ...category,
+      spent,
+      remaining: Math.max(category.periodLimit - spent, 0),
+      percentage,
+      alertLevel: category.periodLimit > 0 ? alertLevel(percentage) : "ok",
+    };
+  });
 
   const normalizedTransactions = transactions.map((transaction) => ({
     ...transaction,
@@ -261,8 +419,75 @@ export async function getFinanceData(database, userId) {
   }
   const primaryCashflow = cashflowByCurrency[primaryCurrency] || { income: 0, expenses: 0 };
 
-  const budgetTotal = normalizedCategories.reduce((sum, category) => sum + category.periodLimit, 0);
-  const budgetSpent = normalizedCategories.reduce((sum, category) => sum + category.spent, 0);
+  const roots = normalizedCategories.filter((category) => !category.parentId);
+  let budgetTotal = 0;
+  let budgetSpent = 0;
+  let fixedReserve = 0;
+  let explicitSavingsReserve = 0;
+  let explicitFixedCount = 0;
+
+  for (const root of roots) {
+    const children = normalizedCategories.filter((category) => category.parentId === root.id);
+    if (root.periodLimit > 0) {
+      budgetTotal += root.periodLimit;
+      budgetSpent += root.spent;
+      if (root.budgetKind === "fixed") {
+        fixedReserve += root.remaining;
+        explicitFixedCount += 1;
+      }
+      if (root.budgetKind === "savings") explicitSavingsReserve += root.remaining;
+      continue;
+    }
+    for (const child of children) {
+      if (child.periodLimit <= 0) continue;
+      budgetTotal += child.periodLimit;
+      budgetSpent += child.spent;
+      if (child.budgetKind === "fixed") {
+        fixedReserve += child.remaining;
+        explicitFixedCount += 1;
+      }
+      if (child.budgetKind === "savings") explicitSavingsReserve += child.remaining;
+    }
+  }
+
+  const fixedFallback = periodFixedExpenses(profile, period);
+  const usingProfileFixedFallback = explicitFixedCount === 0 && fixedFallback > 0;
+  if (usingProfileFixedFallback) fixedReserve = fixedFallback;
+
+  const targetSavingsReserve = Math.round(primaryCashflow.income * Math.max(0, Math.min(profile.savingsTargetPercent, 100)) / 100);
+  const savingsReserve = Math.max(explicitSavingsReserve, targetSavingsReserve);
+  const nonLiquidProducts = new Set(["certificate", "investment", "contribution"]);
+  const liquidBalance = normalizedAccounts
+    .filter((account) => account.currencyCode === primaryCurrency && !nonLiquidProducts.has(account.productType))
+    .reduce((sum, account) => sum + account.balance, 0);
+  const safeToSpend = Math.max(liquidBalance - fixedReserve - savingsReserve, 0);
+
+  const nextPayday = paydayDetails(profile, period);
+  let safeUntil = period.end;
+  let safeUntilKind = "period";
+  if (nextPayday?.date && nextPayday.date <= period.end) {
+    safeUntil = nextPayday.date;
+    safeUntilKind = "payday";
+  }
+  const daysForSafeSpend = Math.max(daysBetween(period.today, safeUntil) + 1, 1);
+  const dailySafeToSpend = Math.floor(safeToSpend / daysForSafeSpend);
+  const expectedPeriodIncome = expectedIncomeForPeriod(profile, period);
+  const incomeReference = Math.max(primaryCashflow.income, expectedPeriodIncome);
+  const unassignedBudget = Math.max(incomeReference - budgetTotal, 0);
+
+  const budgetAlerts = normalizedCategories
+    .filter((category) => category.periodLimit > 0 && category.percentage >= 70)
+    .map((category) => ({
+      categoryId: category.id,
+      name: category.name,
+      parentId: category.parentId,
+      percentage: category.percentage,
+      level: category.alertLevel,
+      spent: category.spent,
+      limit: category.periodLimit,
+      remaining: category.remaining,
+    }))
+    .sort((a, b) => b.percentage - a.percentage);
 
   const balanceHistory = [];
   for (const transaction of normalizedTransactions) {
@@ -337,7 +562,33 @@ export async function getFinanceData(database, userId) {
     adjustments: normalizedAdjustments,
     balanceHistory: balanceHistory.slice(0, 400),
     goals: normalizedGoals,
-    period,
+    period: {
+      ...period,
+      daysRemaining: Math.max(daysBetween(period.today, period.end) + 1, 1),
+    },
+    budgetPlan: {
+      periodKey: period.key,
+      assigned: budgetTotal,
+      spent: budgetSpent,
+      remaining: Math.max(budgetTotal - budgetSpent, 0),
+      unassigned: unassignedBudget,
+      expectedIncome: expectedPeriodIncome,
+      incomeReference,
+      liquidBalance,
+      fixedReserve,
+      savingsReserve,
+      safeToSpend,
+      dailySafeToSpend,
+      daysForSafeSpend,
+      safeUntil,
+      safeUntilKind,
+      nextPayday,
+      usingProfileFixedFallback,
+      alerts: budgetAlerts,
+      alertCount: budgetAlerts.length,
+      configuredEnvelopes: normalizedCategories.filter((category) => category.hasPeriodBudget && category.periodLimit > 0).length,
+      legacyEnvelopes: normalizedCategories.filter((category) => category.budgetIsLegacy).length,
+    },
     summary: {
       totalBalance: primaryBalance,
       primaryBalance,
@@ -350,7 +601,14 @@ export async function getFinanceData(database, userId) {
       periodExpenses: primaryCashflow.expenses,
       cashflowByCurrency,
       budgetTotal,
+      budgetSpent,
       budgetAvailable: Math.max(budgetTotal - budgetSpent, 0),
+      safeToSpend,
+      dailySafeToSpend,
+      fixedReserve,
+      savingsReserve,
+      liquidBalance,
+      budgetAlertCount: budgetAlerts.length,
     },
   };
 }

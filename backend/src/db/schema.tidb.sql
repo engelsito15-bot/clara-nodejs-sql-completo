@@ -107,6 +107,21 @@ CREATE TABLE IF NOT EXISTS budgets (
   CONSTRAINT fk_budgets_category FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS period_budgets (
+  user_id BIGINT NOT NULL,
+  category_id BIGINT NOT NULL,
+  period_key VARCHAR(20) NOT NULL,
+  limit_amount BIGINT NOT NULL DEFAULT 0,
+  budget_kind VARCHAR(20) NOT NULL DEFAULT 'flexible',
+  note VARCHAR(240) NOT NULL DEFAULT '',
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, category_id, period_key),
+  CONSTRAINT chk_period_budgets_limit CHECK (limit_amount >= 0),
+  CONSTRAINT chk_period_budgets_kind CHECK (budget_kind IN ('fixed', 'flexible', 'savings')),
+  CONSTRAINT fk_period_budgets_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_period_budgets_category FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS transactions (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   user_id BIGINT NOT NULL,
