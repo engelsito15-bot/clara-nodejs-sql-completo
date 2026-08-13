@@ -111,7 +111,7 @@ export async function getFinanceData(database, userId) {
      WHERE COALESCE(c.is_active, 1) = 1
        AND (c.user_id IS NULL OR c.user_id = ?)
      GROUP BY c.id, c.name, c.display_name, c.symbol, b.monthly_limit, c.color,
-       c.parent_id, parent.display_name, c.user_id, c.is_system, c.created_at
+       c.parent_id, parent.display_name, parent.name, c.user_id, c.is_system, c.created_at
      ORDER BY CASE WHEN c.parent_id IS NULL THEN 0 ELSE 1 END,
        COALESCE(c.parent_id, c.id), c.created_at, c.id`,
     [period.start, period.end, primaryCurrency, primaryCurrency, userId, userId, userId],
