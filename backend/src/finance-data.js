@@ -238,19 +238,26 @@ export async function getFinanceData(database, userId) {
   }, {});
   const primaryBalance = currencyTotals[primaryCurrency] || 0;
 
+  // TiDB usa ONLY_FULL_GROUP_BY. Agrupamos por la columna real y normalizamos
+  // los registros antiguos con currency_code NULL en JavaScript para evitar que
+  // COALESCE(currency_code, ?) con parámetros sea rechazado por el motor SQL.
   const cashflowRows = await database.all(
-    `SELECT COALESCE(currency_code, ?) AS currencyCode,
+    `SELECT currency_code AS currencyCode,
       COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS income,
       COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expenses
      FROM transactions
      WHERE user_id = ? AND transaction_date BETWEEN ? AND ?
-     GROUP BY COALESCE(currency_code, ?)`,
-    [primaryCurrency, userId, period.start, period.end, primaryCurrency],
+     GROUP BY currency_code`,
+    [userId, period.start, period.end],
   );
   const cashflowByCurrency = {};
   for (const row of cashflowRows) {
     const code = String(row.currencyCode || primaryCurrency).toUpperCase();
-    cashflowByCurrency[code] = { income: normalizeNumber(row.income), expenses: normalizeNumber(row.expenses) };
+    if (!cashflowByCurrency[code]) {
+      cashflowByCurrency[code] = { income: 0, expenses: 0 };
+    }
+    cashflowByCurrency[code].income += normalizeNumber(row.income);
+    cashflowByCurrency[code].expenses += normalizeNumber(row.expenses);
   }
   const primaryCashflow = cashflowByCurrency[primaryCurrency] || { income: 0, expenses: 0 };
 
