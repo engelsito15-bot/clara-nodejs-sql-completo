@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   product_type TEXT NOT NULL DEFAULT 'other',
   nickname TEXT NOT NULL DEFAULT '',
   is_archived INTEGER NOT NULL DEFAULT 0,
+  currency_code TEXT NOT NULL DEFAULT 'DOP',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -68,14 +69,22 @@ CREATE TABLE IF NOT EXISTS account_balance_adjustments (
   previous_balance INTEGER NOT NULL CHECK (previous_balance >= 0),
   new_balance INTEGER NOT NULL CHECK (new_balance >= 0),
   reason TEXT NOT NULL DEFAULT '',
+  currency_code TEXT NOT NULL DEFAULT 'DOP',
+  source TEXT NOT NULL DEFAULT 'MANUAL',
+  adjustment_date TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS categories (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL DEFAULT '',
   symbol TEXT NOT NULL,
   color TEXT NOT NULL DEFAULT 'mint',
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  parent_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+  is_system INTEGER NOT NULL DEFAULT 0,
+  is_active INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -98,6 +107,14 @@ CREATE TABLE IF NOT EXISTS transactions (
   category_id INTEGER REFERENCES categories(id),
   transaction_date TEXT NOT NULL,
   note TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'MANUAL',
+  currency_code TEXT NOT NULL DEFAULT 'DOP',
+  destination_amount INTEGER,
+  destination_currency_code TEXT,
+  balance_after INTEGER,
+  destination_balance_after INTEGER,
+  period_key TEXT NOT NULL DEFAULT '',
+  external_ref TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

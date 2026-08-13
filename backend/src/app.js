@@ -17,6 +17,19 @@ import {
 } from "./auth.js";
 import { createDatabase, runInTransaction } from "./database.js";
 import { getFinanceData } from "./finance-data.js";
+import {
+  createTransaction as engineCreateTransaction,
+  createTransfer as engineCreateTransfer,
+  updateBudget as engineUpdateBudget,
+  createGoal as engineCreateGoal,
+  contributeToGoal as engineContributeToGoal,
+  createAccount as engineCreateAccount,
+  updateAccount as engineUpdateAccount,
+  deleteAccount as engineDeleteAccount,
+  createCategory as engineCreateCategory,
+  updateCategory as engineUpdateCategory,
+  deleteCategory as engineDeleteCategory,
+} from "./finance-engine.js";
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 const frontendBuild = join(currentDirectory, "..", "..", "frontend", "dist");
@@ -464,33 +477,43 @@ export function createApp({ databasePath } = {}) {
       const userId = request.auth.user.id;
       switch (payload.action) {
         case "transaction":
-          await createTransaction(database, userId, payload);
+          await engineCreateTransaction(database, userId, payload);
           break;
         case "transfer":
-          await createTransfer(database, userId, payload);
+          await engineCreateTransfer(database, userId, payload);
           break;
         case "budget":
-          await updateBudget(database, userId, payload);
+          await engineUpdateBudget(database, userId, payload);
           break;
         case "goal":
-          await createGoal(database, userId, payload);
+          await engineCreateGoal(database, userId, payload);
           break;
         case "goal-contribution":
-          await contributeToGoal(database, userId, payload);
+          await engineContributeToGoal(database, userId, payload);
           break;
         case "account":
-          await createAccount(database, userId, payload);
+          await engineCreateAccount(database, userId, payload);
           break;
         case "account-update":
-          await updateAccount(database, userId, payload);
+          await engineUpdateAccount(database, userId, payload);
           break;
         case "account-delete":
-          await deleteAccount(database, userId, payload);
+          await engineDeleteAccount(database, userId, payload);
+          break;
+        case "category":
+          await engineCreateCategory(database, userId, payload);
+          break;
+        case "category-update":
+          await engineUpdateCategory(database, userId, payload);
+          break;
+        case "category-delete":
+          await engineDeleteCategory(database, userId, payload);
           break;
         default:
           throw requestError("Operación no reconocida.");
       }
-      response.status(201).json({ data: await getFinanceData(database, userId) });
+      const successStatus = ["account-update", "category-update"].includes(payload.action) ? 200 : 201;
+      response.status(successStatus).json({ data: await getFinanceData(database, userId) });
     } catch (error) {
       next(error);
     }

@@ -17,6 +17,12 @@ const baseCategories = [
   [4, "Bienestar", "BI", "lilac"],
   [5, "Ocio", "OC", "sun"],
   [6, "Educación", "ED", "mint"],
+  [7, "Salud", "SA", "coral"],
+  [8, "Servicios", "SE", "sky"],
+  [9, "Trabajo", "TR", "forest"],
+  [10, "Deudas", "DE", "lilac"],
+  [11, "Compras", "CO", "sun"],
+  [12, "Otros", "OT", "mint"],
 ];
 
 const defaultAccounts = [
@@ -40,8 +46,25 @@ function ensureSqliteMultiUserSchema(database) {
     ["accounts", "product_type", "TEXT NOT NULL DEFAULT 'other'"],
     ["accounts", "nickname", "TEXT NOT NULL DEFAULT ''"],
     ["accounts", "is_archived", "INTEGER NOT NULL DEFAULT 0"],
+    ["accounts", "currency_code", "TEXT NOT NULL DEFAULT 'DOP'"],
     ["transactions", "user_id", "INTEGER"],
+    ["transactions", "source", "TEXT NOT NULL DEFAULT 'MANUAL'"],
+    ["transactions", "currency_code", "TEXT NOT NULL DEFAULT 'DOP'"],
+    ["transactions", "destination_amount", "INTEGER"],
+    ["transactions", "destination_currency_code", "TEXT"],
+    ["transactions", "balance_after", "INTEGER"],
+    ["transactions", "destination_balance_after", "INTEGER"],
+    ["transactions", "period_key", "TEXT NOT NULL DEFAULT ''"],
+    ["transactions", "external_ref", "TEXT NOT NULL DEFAULT ''"],
     ["goals", "user_id", "INTEGER"],
+    ["categories", "display_name", "TEXT NOT NULL DEFAULT ''"],
+    ["categories", "user_id", "INTEGER"],
+    ["categories", "parent_id", "INTEGER"],
+    ["categories", "is_system", "INTEGER NOT NULL DEFAULT 0"],
+    ["categories", "is_active", "INTEGER NOT NULL DEFAULT 1"],
+    ["account_balance_adjustments", "currency_code", "TEXT NOT NULL DEFAULT 'DOP'"],
+    ["account_balance_adjustments", "source", "TEXT NOT NULL DEFAULT 'MANUAL'"],
+    ["account_balance_adjustments", "adjustment_date", "TEXT NOT NULL DEFAULT ''"],
     ["user_profiles", "employment_status", "TEXT NOT NULL DEFAULT 'employee'"],
     ["user_profiles", "dependents", "INTEGER NOT NULL DEFAULT 0"],
     ["user_profiles", "debt_balance", "INTEGER NOT NULL DEFAULT 0"],
@@ -51,6 +74,9 @@ function ensureSqliteMultiUserSchema(database) {
     ["user_profiles", "payday_two", "INTEGER"],
     ["user_profiles", "financial_confidence", "INTEGER NOT NULL DEFAULT 3"],
   ];
+
+  const accountCurrencyWasMissing = !sqliteColumnExists(database, "accounts", "currency_code");
+  const transactionCurrencyWasMissing = !sqliteColumnExists(database, "transactions", "currency_code");
 
   for (const [table, column, definition] of columns) {
     if (!sqliteColumnExists(database, table, column)) {
@@ -73,30 +99,86 @@ function ensureSqliteMultiUserSchema(database) {
       previous_balance INTEGER NOT NULL,
       new_balance INTEGER NOT NULL,
       reason TEXT NOT NULL DEFAULT '',
+      currency_code TEXT NOT NULL DEFAULT 'DOP',
+      source TEXT NOT NULL DEFAULT 'MANUAL',
+      adjustment_date TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_accounts_user ON accounts(user_id);
     CREATE INDEX IF NOT EXISTS idx_accounts_user_active ON accounts(user_id, is_archived);
     CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, transaction_date);
+    CREATE INDEX IF NOT EXISTS idx_transactions_user_period ON transactions(user_id, period_key);
     CREATE INDEX IF NOT EXISTS idx_goals_user_due_date ON goals(user_id, due_date);
     CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets(user_id);
     CREATE INDEX IF NOT EXISTS idx_adjustments_user_account ON account_balance_adjustments(user_id, account_id);
+    CREATE INDEX IF NOT EXISTS idx_categories_user_active ON categories(user_id, is_active);
+    CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id);
   `);
+
+  database.exec(`
+    UPDATE categories
+       SET display_name = name
+     WHERE COALESCE(display_name, '') = '';
+    UPDATE categories
+       SET is_system = 1
+     WHERE user_id IS NULL AND id BETWEEN 1 AND 12;
+    UPDATE account_balance_adjustments
+       SET adjustment_date = substr(created_at, 1, 10)
+     WHERE COALESCE(adjustment_date, '') = '';
+  `);
+
+  if (accountCurrencyWasMissing) {
+    database.exec(`
+      UPDATE accounts
+         SET currency_code = COALESCE(
+           (SELECT currency_code FROM users WHERE users.id = accounts.user_id),
+           'DOP'
+         );
+      UPDATE account_balance_adjustments
+         SET currency_code = COALESCE(
+           (SELECT currency_code FROM accounts WHERE accounts.id = account_balance_adjustments.account_id),
+           'DOP'
+         );
+    `);
+  }
+  if (transactionCurrencyWasMissing) {
+    database.exec(`
+      UPDATE transactions
+         SET currency_code = COALESCE(
+           (SELECT currency_code FROM accounts WHERE accounts.id = transactions.account_id),
+           'DOP'
+         );
+      UPDATE transactions
+         SET destination_currency_code = (
+           SELECT currency_code FROM accounts WHERE accounts.id = transactions.destination_account_id
+         )
+       WHERE destination_account_id IS NOT NULL;
+    `);
+  }
 }
 
 function seedSqliteCategories(database) {
-  const categoryCount = Number(database.prepare("SELECT COUNT(*) AS count FROM categories").get().count || 0);
-  if (categoryCount) return;
-
   const columns = database.prepare("PRAGMA table_info(categories)").all().map((row) => row.name);
   const hasLegacyLimit = columns.includes("monthly_limit");
+  const selectCategory = database.prepare("SELECT id FROM categories WHERE id = ?");
   const insertCategory = hasLegacyLimit
-    ? database.prepare("INSERT INTO categories (id, name, symbol, monthly_limit, color) VALUES (?, ?, ?, 0, ?)")
-    : database.prepare("INSERT INTO categories (id, name, symbol, color) VALUES (?, ?, ?, ?)");
+    ? database.prepare("INSERT INTO categories (id, name, display_name, symbol, monthly_limit, color, is_system, is_active) VALUES (?, ?, ?, ?, 0, ?, 1, 1)")
+    : database.prepare("INSERT INTO categories (id, name, display_name, symbol, color, is_system, is_active) VALUES (?, ?, ?, ?, ?, 1, 1)");
+  const updateCategory = database.prepare(
+    "UPDATE categories SET display_name = ?, symbol = ?, color = ?, is_system = 1, is_active = 1 WHERE id = ? AND user_id IS NULL",
+  );
 
   database.exec("BEGIN IMMEDIATE");
   try {
-    baseCategories.forEach((row) => insertCategory.run(...row));
+    for (const [id, name, symbol, color] of baseCategories) {
+      if (selectCategory.get(id)) {
+        updateCategory.run(name, symbol, color, id);
+      } else if (hasLegacyLimit) {
+        insertCategory.run(id, name, name, symbol, color);
+      } else {
+        insertCategory.run(id, name, name, symbol, color);
+      }
+    }
     database.exec("COMMIT");
   } catch (error) {
     database.exec("ROLLBACK");
@@ -105,15 +187,15 @@ function seedSqliteCategories(database) {
 }
 
 function ensureSqliteUserAccounts(database) {
-  const users = database.prepare("SELECT id FROM users ORDER BY id").all();
+  const users = database.prepare("SELECT id, currency_code AS currencyCode FROM users ORDER BY id").all();
   const countAccounts = database.prepare("SELECT COUNT(*) AS count FROM accounts WHERE user_id = ? AND COALESCE(is_archived, 0) = 0");
   const insertAccount = database.prepare(
-    "INSERT INTO accounts (user_id, name, kind, balance, color) VALUES (?, ?, ?, 0, ?)",
+    "INSERT INTO accounts (user_id, name, kind, balance, color, currency_code) VALUES (?, ?, ?, 0, ?, ?)",
   );
 
   for (const user of users) {
     if (Number(countAccounts.get(user.id).count || 0) > 0) continue;
-    for (const [name, kind, color] of defaultAccounts) insertAccount.run(user.id, name, kind, color);
+    for (const [name, kind, color] of defaultAccounts) insertAccount.run(user.id, name, kind, color, user.currencyCode || "DOP");
   }
 }
 
@@ -210,8 +292,25 @@ async function ensureTidbMultiUserSchema(connection) {
     ["accounts", "product_type", "VARCHAR(30) NOT NULL DEFAULT 'other'"],
     ["accounts", "nickname", "VARCHAR(80) NOT NULL DEFAULT ''"],
     ["accounts", "is_archived", "TINYINT(1) NOT NULL DEFAULT 0"],
+    ["accounts", "currency_code", "VARCHAR(10) NOT NULL DEFAULT 'DOP'"],
     ["transactions", "user_id", "BIGINT NULL"],
+    ["transactions", "source", "VARCHAR(20) NOT NULL DEFAULT 'MANUAL'"],
+    ["transactions", "currency_code", "VARCHAR(10) NOT NULL DEFAULT 'DOP'"],
+    ["transactions", "destination_amount", "BIGINT NULL"],
+    ["transactions", "destination_currency_code", "VARCHAR(10) NULL"],
+    ["transactions", "balance_after", "BIGINT NULL"],
+    ["transactions", "destination_balance_after", "BIGINT NULL"],
+    ["transactions", "period_key", "VARCHAR(20) NOT NULL DEFAULT ''"],
+    ["transactions", "external_ref", "VARCHAR(120) NOT NULL DEFAULT ''"],
     ["goals", "user_id", "BIGINT NULL"],
+    ["categories", "display_name", "VARCHAR(150) NOT NULL DEFAULT ''"],
+    ["categories", "user_id", "BIGINT NULL"],
+    ["categories", "parent_id", "BIGINT NULL"],
+    ["categories", "is_system", "TINYINT(1) NOT NULL DEFAULT 0"],
+    ["categories", "is_active", "TINYINT(1) NOT NULL DEFAULT 1"],
+    ["account_balance_adjustments", "currency_code", "VARCHAR(10) NOT NULL DEFAULT 'DOP'"],
+    ["account_balance_adjustments", "source", "VARCHAR(20) NOT NULL DEFAULT 'MANUAL'"],
+    ["account_balance_adjustments", "adjustment_date", "DATE NULL"],
     ["user_profiles", "employment_status", "VARCHAR(30) NOT NULL DEFAULT 'employee'"],
     ["user_profiles", "dependents", "INT NOT NULL DEFAULT 0"],
     ["user_profiles", "debt_balance", "BIGINT NOT NULL DEFAULT 0"],
@@ -221,6 +320,9 @@ async function ensureTidbMultiUserSchema(connection) {
     ["user_profiles", "payday_two", "INT NULL"],
     ["user_profiles", "financial_confidence", "INT NOT NULL DEFAULT 3"],
   ];
+
+  const accountCurrencyWasMissing = !(await tidbColumnExists(connection, "accounts", "currency_code"));
+  const transactionCurrencyWasMissing = !(await tidbColumnExists(connection, "transactions", "currency_code"));
 
   for (const [table, column, definition] of columns) {
     if (!(await tidbColumnExists(connection, table, column))) {
@@ -246,51 +348,92 @@ async function ensureTidbMultiUserSchema(connection) {
     previous_balance BIGINT NOT NULL,
     new_balance BIGINT NOT NULL,
     reason VARCHAR(240) NOT NULL DEFAULT '',
+    currency_code VARCHAR(10) NOT NULL DEFAULT 'DOP',
+    source VARCHAR(20) NOT NULL DEFAULT 'MANUAL',
+    adjustment_date DATE NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_adjustments_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
     CONSTRAINT fk_adjustments_account FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
   )`);
 
+  await connection.query("UPDATE categories SET display_name = name WHERE COALESCE(display_name, '') = ''");
+  await connection.query("UPDATE categories SET is_system = 1 WHERE user_id IS NULL AND id BETWEEN 1 AND 12");
+  await connection.query("UPDATE account_balance_adjustments SET adjustment_date = DATE(created_at) WHERE adjustment_date IS NULL");
+
+  if (accountCurrencyWasMissing) {
+    await connection.query(`
+      UPDATE accounts a
+      JOIN users u ON u.id = a.user_id
+         SET a.currency_code = u.currency_code
+    `);
+    await connection.query(`
+      UPDATE account_balance_adjustments aa
+      JOIN accounts a ON a.id = aa.account_id
+         SET aa.currency_code = a.currency_code
+    `);
+  }
+  if (transactionCurrencyWasMissing) {
+    await connection.query(`
+      UPDATE transactions t
+      JOIN accounts a ON a.id = t.account_id
+         SET t.currency_code = a.currency_code
+    `);
+    await connection.query(`
+      UPDATE transactions t
+      JOIN accounts a ON a.id = t.destination_account_id
+         SET t.destination_currency_code = a.currency_code
+       WHERE t.destination_account_id IS NOT NULL
+    `);
+  }
+
   const indexes = [
     "CREATE INDEX IF NOT EXISTS idx_accounts_user ON accounts(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_accounts_user_active ON accounts(user_id, is_archived)",
     "CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, transaction_date)",
+    "CREATE INDEX IF NOT EXISTS idx_transactions_user_period ON transactions(user_id, period_key)",
     "CREATE INDEX IF NOT EXISTS idx_goals_user_due_date ON goals(user_id, due_date)",
     "CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_adjustments_user_account ON account_balance_adjustments(user_id, account_id)",
+    "CREATE INDEX IF NOT EXISTS idx_categories_user_active ON categories(user_id, is_active)",
+    "CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id)",
   ];
   for (const statement of indexes) await connection.query(statement);
 }
 
 async function seedTidbCategories(connection) {
-  const [[categoryCountRow]] = await connection.query("SELECT COUNT(*) AS count FROM categories");
-  if (Number(categoryCountRow.count || 0)) return;
-
   const hasLegacyLimit = await tidbColumnExists(connection, "categories", "monthly_limit");
   for (const [id, name, symbol, color] of baseCategories) {
+    const [[existing]] = await connection.execute("SELECT id FROM categories WHERE id = ?", [id]);
+    if (existing) {
+      await connection.execute(
+        "UPDATE categories SET display_name = ?, symbol = ?, color = ?, is_system = 1, is_active = 1 WHERE id = ? AND user_id IS NULL",
+        [name, symbol, color, id],
+      );
+      continue;
+    }
     if (hasLegacyLimit) {
       await connection.execute(
-        "INSERT INTO categories (id, name, symbol, monthly_limit, color) VALUES (?, ?, ?, 0, ?)",
-        [id, name, symbol, color],
+        "INSERT INTO categories (id, name, display_name, symbol, monthly_limit, color, is_system, is_active) VALUES (?, ?, ?, ?, 0, ?, 1, 1)",
+        [id, name, name, symbol, color],
       );
     } else {
       await connection.execute(
-        "INSERT INTO categories (id, name, symbol, color) VALUES (?, ?, ?, ?)",
-        [id, name, symbol, color],
+        "INSERT INTO categories (id, name, display_name, symbol, color, is_system, is_active) VALUES (?, ?, ?, ?, ?, 1, 1)",
+        [id, name, name, symbol, color],
       );
     }
   }
 }
 
 async function ensureTidbUserAccounts(connection) {
-  const [users] = await connection.query("SELECT id FROM users ORDER BY id");
+  const [users] = await connection.query("SELECT id, currency_code AS currencyCode FROM users ORDER BY id");
   for (const user of users) {
     const [[row]] = await connection.execute("SELECT COUNT(*) AS count FROM accounts WHERE user_id = ? AND COALESCE(is_archived, 0) = 0", [user.id]);
     if (Number(row.count || 0) > 0) continue;
     for (const [name, kind, color] of defaultAccounts) {
       await connection.execute(
-        "INSERT INTO accounts (user_id, name, kind, balance, color) VALUES (?, ?, ?, 0, ?)",
-        [user.id, name, kind, color],
+        "INSERT INTO accounts (user_id, name, kind, balance, color, currency_code) VALUES (?, ?, ?, 0, ?, ?)",
+        [user.id, name, kind, color, user.currencyCode || "DOP"],
       );
     }
   }

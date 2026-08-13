@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   product_type VARCHAR(30) NOT NULL DEFAULT 'other',
   nickname VARCHAR(80) NOT NULL DEFAULT '',
   is_archived TINYINT(1) NOT NULL DEFAULT 0,
+  currency_code VARCHAR(10) NOT NULL DEFAULT 'DOP',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT chk_accounts_kind CHECK (kind IN ('bank', 'savings', 'cash')),
   CONSTRAINT chk_accounts_balance CHECK (balance >= 0),
@@ -70,6 +71,9 @@ CREATE TABLE IF NOT EXISTS account_balance_adjustments (
   previous_balance BIGINT NOT NULL,
   new_balance BIGINT NOT NULL,
   reason VARCHAR(240) NOT NULL DEFAULT '',
+  currency_code VARCHAR(10) NOT NULL DEFAULT 'DOP',
+  source VARCHAR(20) NOT NULL DEFAULT 'MANUAL',
+  adjustment_date DATE NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT chk_adjustments_previous CHECK (previous_balance >= 0),
   CONSTRAINT chk_adjustments_new CHECK (new_balance >= 0),
@@ -80,9 +84,16 @@ CREATE TABLE IF NOT EXISTS account_balance_adjustments (
 CREATE TABLE IF NOT EXISTS categories (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   name VARCHAR(150) NOT NULL UNIQUE,
+  display_name VARCHAR(150) NOT NULL DEFAULT '',
   symbol VARCHAR(20) NOT NULL,
   color VARCHAR(30) NOT NULL DEFAULT 'mint',
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  user_id BIGINT NULL,
+  parent_id BIGINT NULL,
+  is_system TINYINT(1) NOT NULL DEFAULT 0,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_categories_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_categories_parent FOREIGN KEY (parent_id) REFERENCES categories(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS budgets (
@@ -107,6 +118,14 @@ CREATE TABLE IF NOT EXISTS transactions (
   category_id BIGINT NULL,
   transaction_date DATE NOT NULL,
   note TEXT NOT NULL,
+  source VARCHAR(20) NOT NULL DEFAULT 'MANUAL',
+  currency_code VARCHAR(10) NOT NULL DEFAULT 'DOP',
+  destination_amount BIGINT NULL,
+  destination_currency_code VARCHAR(10) NULL,
+  balance_after BIGINT NULL,
+  destination_balance_after BIGINT NULL,
+  period_key VARCHAR(20) NOT NULL DEFAULT '',
+  external_ref VARCHAR(120) NOT NULL DEFAULT '',
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT chk_transactions_type CHECK (type IN ('income', 'expense', 'transfer')),
   CONSTRAINT chk_transactions_amount CHECK (amount > 0),
