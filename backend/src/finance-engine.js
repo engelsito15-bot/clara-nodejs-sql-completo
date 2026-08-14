@@ -198,6 +198,7 @@ export async function createTransaction(database, userId, payload) {
   const description = String(payload.description || "").trim().slice(0, 255);
   const transactionDate = validDate(payload.transactionDate);
   const source = normalizeSource(payload.source);
+  const externalRef = String(payload.externalRef || "").trim().slice(0, 120);
 
   if (!amount || !accountId || !description) throw requestError("Completa la cuenta, el concepto y un monto válido.");
   if (type === "expense" && !categoryId) throw requestError("Selecciona una categoría para el gasto.");
@@ -205,6 +206,10 @@ export async function createTransaction(database, userId, payload) {
   const settings = await userFinanceSettings(database, userId);
 
   await runInTransaction(database, async (transaction) => {
+    if (externalRef) {
+      const duplicate = await transaction.get("SELECT id FROM transactions WHERE user_id = ? AND external_ref = ? LIMIT 1", [userId, externalRef]);
+      if (duplicate) return;
+    }
     const account = await accountById(transaction, accountId, userId);
     if (!account) throw requestError("La cuenta seleccionada no existe.", 404);
     if (type === "expense" && Number(account.balance) < amount) throw requestError("La cuenta no tiene saldo suficiente.");
@@ -236,7 +241,7 @@ export async function createTransaction(database, userId, payload) {
         currencyCode,
         balanceAfter,
         periodKeyForDate(transactionDate, settings.planningPeriod),
-        String(payload.externalRef || "").trim().slice(0, 120),
+        externalRef,
       ],
     );
   });
@@ -248,6 +253,7 @@ export async function createTransfer(database, userId, payload) {
   const destinationId = integerId(payload.destinationAccountId);
   const transactionDate = validDate(payload.transactionDate);
   const sourceType = normalizeSource(payload.source);
+  const externalRef = String(payload.externalRef || "").trim().slice(0, 120);
   if (!amount || !sourceId || !destinationId || sourceId === destinationId) {
     throw requestError("Selecciona dos cuentas distintas y un monto válido.");
   }
@@ -255,6 +261,10 @@ export async function createTransfer(database, userId, payload) {
   const settings = await userFinanceSettings(database, userId);
 
   await runInTransaction(database, async (transaction) => {
+    if (externalRef) {
+      const duplicate = await transaction.get("SELECT id FROM transactions WHERE user_id = ? AND external_ref = ? LIMIT 1", [userId, externalRef]);
+      if (duplicate) return;
+    }
     const source = await accountById(transaction, sourceId, userId);
     const destination = await accountById(transaction, destinationId, userId);
     if (!source || !destination) throw requestError("Una de las cuentas no existe.", 404);
@@ -298,7 +308,7 @@ export async function createTransfer(database, userId, payload) {
         sourceBalanceAfter,
         destinationBalanceAfter,
         periodKeyForDate(transactionDate, settings.planningPeriod),
-        String(payload.externalRef || "").trim().slice(0, 120),
+        externalRef,
       ],
     );
   });

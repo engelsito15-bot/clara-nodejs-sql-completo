@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { institutionsForType } from "./institutions.js";
+import { usePwaManager, saveOfflineSnapshot, loadOfflineSnapshot, clearOfflineSnapshots } from "./pwa.js";
 
 const EMPTY_DATA = {
   accounts: [],
@@ -156,6 +157,11 @@ const iconPaths = {
   trendingDown: ["M3 7l6 6 4-4 8 8", "M17 17h4v-4"],
   trendingUp: ["M3 17l6-6 4 4 8-8", "M17 7h4v4"],
   lock: ["M6 10V7a6 6 0 0 1 12 0v3", "M5 10h14v11H5z"],
+  download: ["M12 3v12", "m7 10 5 5 5-5", "M5 21h14"],
+  smartphone: ["M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z", "M10 18h4"],
+  wifi: ["M5 12.55a11 11 0 0 1 14 0", "M8.5 16a6 6 0 0 1 7 0", "M12 20h.01"],
+  wifiOff: ["m2 2 20 20", "M8.5 8.5A11 11 0 0 1 19 12.55", "M5 12.55a11 11 0 0 1 2.16-1.54", "M8.5 16a6 6 0 0 1 7 0", "M12 20h.01"],
+  share: ["M12 3v12", "m8 7 4-4 4 4", "M5 12v8h14v-8"],
 };
 
 function Icon({ name, size = 18, strokeWidth = 1.8, className = "" }) {
@@ -740,7 +746,10 @@ function OnboardingWizard({ user, saving, error, onSubmit, editing = false, onCa
 }
 
 function SavingsApp() {
-  const [activeView, setActiveView] = useState("inicio");
+  const [activeView, setActiveView] = useState(() => {
+    const requested = new URLSearchParams(window.location.search).get("view");
+    return navItems.some((item) => item.id === requested) ? requested : "inicio";
+  });
   const [data, setData] = useState(EMPTY_DATA);
   const [modal, setModal] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -758,6 +767,7 @@ function SavingsApp() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
   const [auth, setAuth] = useState({ checking: true, registrationEnabled: true, user: null });
+  const pwa = usePwaManager(token);
 
   const currencyCode = auth.user?.currencyCode || "DOP";
   const moneyTools = useMemo(() => ({
@@ -770,6 +780,7 @@ function SavingsApp() {
 
   function clearSession() {
     localStorage.removeItem(TOKEN_KEY);
+    void clearOfflineSnapshots();
     setToken("");
     setData(EMPTY_DATA);
     setAuth((current) => ({ ...current, checking: false, user: null }));
@@ -786,6 +797,7 @@ function SavingsApp() {
       }
       if (!response.ok || !result?.data) throw new Error(result?.error || "No se pudieron cargar tus datos.");
       setData(result.data);
+      void saveOfflineSnapshot("finance-data", result.data);
       setError("");
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "No se pudo conectar con tus datos.");
@@ -798,6 +810,21 @@ function SavingsApp() {
     let active = true;
     async function bootstrap() {
       try {
+        const storedToken = localStorage.getItem(TOKEN_KEY) || "";
+        if (!navigator.onLine) {
+          if (storedToken) {
+            const [cachedUser, cachedData] = await Promise.all([loadOfflineSnapshot("auth-user"), loadOfflineSnapshot("finance-data")]);
+            if (active && cachedUser && cachedData) {
+              setToken(storedToken);
+              setAuth({ checking: false, registrationEnabled: true, user: cachedUser });
+              setData(cachedData);
+              setLoading(false);
+              setError("");
+              return;
+            }
+          }
+          throw new Error("No hay conexión. Abre Clara una vez con internet para preparar el modo offline en este dispositivo.");
+        }
         await waitForBackend();
         if (!active) return;
 
@@ -806,7 +833,6 @@ function SavingsApp() {
         if (!active) return;
 
         const registrationEnabled = status?.registrationEnabled !== false;
-        const storedToken = localStorage.getItem(TOKEN_KEY) || "";
         if (!storedToken) {
           setLoading(false);
           setAuth({ checking: false, registrationEnabled, user: null });
@@ -825,9 +851,22 @@ function SavingsApp() {
 
         setToken(storedToken);
         setAuth({ checking: false, registrationEnabled, user: meResult.user });
+        void saveOfflineSnapshot("auth-user", meResult.user);
         await refresh(storedToken);
       } catch (requestError) {
         if (!active) return;
+        const storedToken = localStorage.getItem(TOKEN_KEY) || "";
+        if (storedToken) {
+          const [cachedUser, cachedData] = await Promise.all([loadOfflineSnapshot("auth-user"), loadOfflineSnapshot("finance-data")]);
+          if (cachedUser && cachedData) {
+            setToken(storedToken);
+            setAuth({ checking: false, registrationEnabled: true, user: cachedUser });
+            setData(cachedData);
+            setLoading(false);
+            setError("");
+            return;
+          }
+        }
         setLoading(false);
         setError(requestError instanceof Error ? requestError.message : "No se pudo conectar con Clara.");
         setAuth({ checking: false, registrationEnabled: true, user: null });
@@ -854,6 +893,7 @@ function SavingsApp() {
     localStorage.setItem(TOKEN_KEY, session.token);
     setToken(session.token);
     setAuth((current) => ({ checking: false, registrationEnabled: current.registrationEnabled, user: session.user }));
+    void saveOfflineSnapshot("auth-user", session.user);
     setError("");
     void refresh(session.token);
   }
@@ -891,6 +931,10 @@ function SavingsApp() {
       if (["goal-update", "goal-delete"].includes(modal.kind)) payload.goalId = modal.referenceId;
     }
 
+    if (["transaction", "transfer"].includes(payload.action) && !payload.externalRef) {
+      payload.externalRef = "device:" + (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    }
+
     try {
       if (modal.kind === "plan-purpose") {
         const { response, result } = await apiRequest("/api/profile", {
@@ -903,6 +947,7 @@ function SavingsApp() {
         if (response.status === 401) { clearSession(); return; }
         if (!response.ok || !result?.user) throw new Error(result?.error || "No se pudo actualizar tu propósito.");
         setAuth((current) => ({ ...current, user: result.user }));
+        void saveOfflineSnapshot("auth-user", result.user);
         await refresh(token);
         setModal(null);
         setNotice("Tu propósito y período quedaron actualizados.");
@@ -914,12 +959,20 @@ function SavingsApp() {
         method: "POST",
         body: JSON.stringify(payload),
       }, token);
+      if (response.status === 202 && result?.queued) {
+        setModal(null);
+        setNotice(`Movimiento guardado sin conexión. Clara lo sincronizará cuando vuelva internet.`);
+        void pwa.refreshQueueCount();
+        window.setTimeout(() => setNotice(""), 5000);
+        return;
+      }
       if (response.status === 401) {
         clearSession();
         return;
       }
       if (!response.ok || !result?.data) throw new Error(result?.error || "No se pudo guardar la operación.");
       setData(result.data);
+      void saveOfflineSnapshot("finance-data", result.data);
       setModal(null);
       setNotice("Listo, los cambios quedaron guardados.");
       window.setTimeout(() => setNotice(""), 3500);
@@ -950,6 +1003,7 @@ function SavingsApp() {
       }
       if (!response.ok || !result?.user) throw new Error(result?.error || "No se pudieron guardar las preferencias.");
       setAuth((current) => ({ ...current, user: result.user }));
+      void saveOfflineSnapshot("auth-user", result.user);
       setSettingsOpen(false);
       setNotice("Preferencias actualizadas.");
       window.setTimeout(() => setNotice(""), 3000);
@@ -974,6 +1028,7 @@ function SavingsApp() {
       if (response.status === 401) { clearSession(); return; }
       if (!response.ok || !result?.user) throw new Error(result?.error || "No se pudo guardar tu perfil financiero.");
       setAuth((current) => ({ ...current, user: result.user }));
+      void saveOfflineSnapshot("auth-user", result.user);
       setProfileWizardOpen(false);
       setNotice("Clara ya conoce cómo quieres organizarte.");
       window.setTimeout(() => setNotice(""), 3500);
@@ -984,18 +1039,40 @@ function SavingsApp() {
     }
   }
 
+  useEffect(() => {
+    const handleSynced = () => { if (token && navigator.onLine) void refresh(token); };
+    window.addEventListener("clara:queue-synced", handleSynced);
+    return () => window.removeEventListener("clara:queue-synced", handleSynced);
+  }, [token]);
+
+  useEffect(() => {
+    if (!auth.user || !auth.user.onboardingCompleted) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("quick") === "expense") {
+      openModal("expense");
+      params.delete("quick");
+      window.history.replaceState({}, "", `${window.location.pathname}${params.toString() ? `?${params}` : ""}`);
+    }
+  }, [auth.user?.id, auth.user?.onboardingCompleted]);
+
   async function logout() {
     try {
       await apiRequest("/api/auth/logout", { method: "POST" }, token);
     } finally {
+      await pwa.clearQueue().catch(() => {});
       setSettingsOpen(false);
       clearSession();
     }
   }
 
-  if (auth.checking) return <LoadingScreen />;
-  if (!auth.user) return <AuthScreen registrationEnabled={auth.registrationEnabled} onAuthenticated={handleAuthenticated} />;
-  if (!auth.user.onboardingCompleted || profileWizardOpen) return <MoneyContext.Provider value={moneyTools}><OnboardingWizard user={auth.user} saving={onboardingSaving} error={error} onSubmit={finishOnboarding} editing={profileWizardOpen && auth.user.onboardingCompleted} onCancel={auth.user.onboardingCompleted ? () => { setProfileWizardOpen(false); setError(""); } : null} /></MoneyContext.Provider>;
+  const pwaInstallUi = <>
+    {pwa.showInstallPrompt && <PwaInstallPrompt pwa={pwa} />}
+    {pwa.showIosGuide && <IosInstallGuide onClose={() => pwa.setShowIosGuide(false)} />}
+  </>;
+
+  if (auth.checking) return <><LoadingScreen />{pwaInstallUi}</>;
+  if (!auth.user) return <><AuthScreen registrationEnabled={auth.registrationEnabled} onAuthenticated={handleAuthenticated} />{pwaInstallUi}</>;
+  if (!auth.user.onboardingCompleted || profileWizardOpen) return <MoneyContext.Provider value={moneyTools}><OnboardingWizard user={auth.user} saving={onboardingSaving} error={error} onSubmit={finishOnboarding} editing={profileWizardOpen && auth.user.onboardingCompleted} onCancel={auth.user.onboardingCompleted ? () => { setProfileWizardOpen(false); setError(""); } : null} />{pwaInstallUi}</MoneyContext.Provider>;
 
   return <MoneyContext.Provider value={moneyTools}>
     <div className="app-shell">
@@ -1042,8 +1119,8 @@ function SavingsApp() {
           </div>
           <div className="topbar-actions">
             <span className="period-pill"><Icon name="calendar" size={14} /> {data.period?.shortLabel || "Periodo actual"}</span>
-            <span className={loading ? "save-status loading" : "save-status"}>
-              <i /> {loading ? "Sincronizando…" : "Todo guardado"}
+            <span className={!pwa.online ? "save-status offline" : loading ? "save-status loading" : "save-status"}>
+              <i /> {!pwa.online ? (pwa.queueCount ? `Sin conexión · ${pwa.queueCount} pendiente${pwa.queueCount === 1 ? "" : "s"}` : "Sin conexión") : loading ? "Sincronizando…" : "Todo guardado"}
             </span>
             <button className="primary-action" onClick={() => openModal("expense")}>
               <Icon name="plus" size={16} /> <span className="action-label">Registrar gasto</span>
@@ -1108,7 +1185,9 @@ function SavingsApp() {
         onSubmit={saveSettings}
         onLogout={logout}
         onEditProfile={() => { setSettingsOpen(false); setError(""); setProfileWizardOpen(true); }}
+        pwa={pwa}
       />}
+      {pwaInstallUi}
     </div>
   </MoneyContext.Provider>;
 }
@@ -2133,7 +2212,7 @@ function OperationModal({ modal, data, saving, error, user, onClose, onSubmit })
   </div>;
 }
 
-function SettingsModal({ user, saving, error, onClose, onSubmit, onLogout, onEditProfile }) {
+function SettingsModal({ user, saving, error, onClose, onSubmit, onLogout, onEditProfile, pwa }) {
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
     if (event.target === event.currentTarget) onClose();
   }}>
@@ -2172,11 +2251,50 @@ function SettingsModal({ user, saving, error, onClose, onSubmit, onLogout, onEdi
         <span><Icon name="clock" size={16} /><small>Próximo cobro</small><strong>{nextPaydayLabel(user.profile)}</strong></span>
       </div>
       <button className="profile-edit-action" type="button" onClick={onEditProfile}><Icon name="user" size={16} /><span><strong>Actualizar mi perfil financiero</strong><small>Ingresos, cobros, deudas, gastos fijos y objetivos.</small></span><Icon name="chevronRight" size={15} /></button>
+      <section className="pwa-settings-card">
+        <div className="pwa-settings-head"><span><Icon name="smartphone" size={19} /></span><div><strong>Clara en este dispositivo</strong><small>{pwa.installed ? "Instalada como app" : "Puedes instalarla y usarla como una app"}</small></div></div>
+        <div className="pwa-status-grid">
+          <span><Icon name={pwa.online ? "wifi" : "wifiOff"} size={16}/><small>Conexión</small><strong>{pwa.online ? "En línea" : "Sin conexión"}</strong></span>
+          <span><Icon name="repeat" size={16}/><small>Cola offline</small><strong>{pwa.queueCount} pendiente{pwa.queueCount === 1 ? "" : "s"}</strong></span>
+        </div>
+        {!pwa.installed && <button type="button" className="pwa-action" onClick={() => void pwa.install()} disabled={pwa.busy}><Icon name="download" size={17}/><span><strong>Instalar Clara</strong><small>{pwa.ios ? "En iPhone te guiamos con los pasos de Apple" : "Abrir como app a pantalla completa"}</small></span><Icon name="chevronRight" size={15}/></button>}
+        <button type="button" className="pwa-action" onClick={() => void (pwa.pushEnabled ? pwa.disableNotifications() : pwa.enableNotifications()).catch((err) => pwa.setMessage(err.message))} disabled={pwa.busy}><Icon name="bell" size={17}/><span><strong>{pwa.pushEnabled ? "Notificaciones activadas" : "Activar notificaciones"}</strong><small>{pwa.pushAvailable ? "Recordatorios de pagos, tarjetas, deudas y metas" : "Requiere configurar Web Push en Render"}</small></span><span className={pwa.pushEnabled ? "pwa-toggle on" : "pwa-toggle"}><i/></span></button>
+        {pwa.pushEnabled && <button type="button" className="pwa-test-button" onClick={() => void pwa.testNotification().catch((err)=>pwa.setMessage(err.message))}>Enviar notificación de prueba</button>}
+        {pwa.message && <p className="pwa-settings-message">{pwa.message}</p>}
+      </section>
       <DeveloperMark />
       <div className="settings-security">
         <div><strong>Sesión segura</strong><small>Cierra tu sesión cuando uses un equipo compartido.</small></div>
         <button className="logout-button" type="button" onClick={onLogout}><Icon name="logout" size={15} /> Cerrar sesión</button>
       </div>
+    </section>
+  </div>;
+}
+
+function PwaInstallPrompt({ pwa }) {
+  return <div className="pwa-install-backdrop" role="presentation">
+    <section className="pwa-install-card" role="dialog" aria-modal="true" aria-labelledby="pwa-install-title">
+      <div className="pwa-install-icon"><Brand compact /></div>
+      <p className="eyebrow">Clara para tu teléfono</p>
+      <h2 id="pwa-install-title">¿Instalar Clara en este dispositivo?</h2>
+      <p>Ábrela desde tu pantalla de inicio, a pantalla completa, con acceso offline básico y recordatorios.</p>
+      <div className="pwa-install-benefits"><span><Icon name="smartphone" size={17}/> Experiencia tipo app</span><span><Icon name="wifiOff" size={17}/> Funciona sin conexión básica</span><span><Icon name="bell" size={17}/> Recordatorios financieros</span></div>
+      <div className="pwa-install-actions"><button className="secondary-action" onClick={pwa.dismissInstall}>Ahora no</button><button className="primary-action" onClick={() => void pwa.install()} disabled={pwa.busy}><Icon name="download" size={16}/>{pwa.busy ? "Preparando…" : "Sí, instalar"}</button></div>
+      {pwa.ios && <small className="pwa-platform-note">En iPhone, iOS exige confirmar la instalación desde el menú de compartir; Clara te mostrará exactamente dónde tocar.</small>}
+    </section>
+  </div>;
+}
+
+function IosInstallGuide({ onClose }) {
+  return <div className="pwa-install-backdrop" role="presentation">
+    <section className="pwa-install-card ios-guide" role="dialog" aria-modal="true" aria-labelledby="ios-guide-title">
+      <button className="modal-close" onClick={onClose} aria-label="Cerrar"><Icon name="close" size={17}/></button>
+      <div className="pwa-install-icon"><Brand compact /></div>
+      <p className="eyebrow">Instalar en iPhone</p>
+      <h2 id="ios-guide-title">Apple requiere tres toques.</h2>
+      <p>iOS no permite que una web se instale silenciosamente. Haz esto una sola vez:</p>
+      <div className="ios-install-steps"><span><b>1</b><Icon name="share" size={19}/><div><strong>Toca Compartir</strong><small>El botón de compartir del navegador.</small></div></span><span><b>2</b><Icon name="plus" size={19}/><div><strong>Agregar a pantalla de inicio</strong><small>Busca esa opción en el menú.</small></div></span><span><b>3</b><Icon name="check" size={19}/><div><strong>Toca Agregar</strong><small>Clara aparecerá como una app.</small></div></span></div>
+      <button className="primary-action ios-guide-done" onClick={onClose}>Entendido</button>
     </section>
   </div>;
 }

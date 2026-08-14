@@ -3276,3 +3276,70 @@ svg {
 .mobile-more-backdrop{display:none}
 @media(max-width:900px){.app-shell{padding-bottom:88px}.main-area{padding:20px 17px 44px}.topbar{margin-bottom:18px}.topbar h1{font-size:26px;line-height:1.08}.mobile-nav{grid-template-columns:repeat(5,minmax(0,1fr))!important;min-height:76px;padding:8px max(8px,env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(8px,env(safe-area-inset-left));gap:4px;background:rgba(255,255,255,.97);box-shadow:0 -10px 30px rgba(20,58,48,.08)}.mobile-nav button{min-height:58px;gap:5px;border-radius:13px;font-weight:800;cursor:pointer}.mobile-nav button>span{width:28px;height:26px;display:grid;place-items:center}.mobile-nav small{font-size:9px!important;font-weight:750}.mobile-nav button.active{background:#e8f4ef;color:#12483a}.mobile-more-backdrop{position:fixed;z-index:85;inset:0;display:flex;align-items:flex-end;background:rgba(5,25,20,.36);backdrop-filter:blur(3px)}.mobile-more-sheet{width:100%;max-height:min(78vh,720px);overflow:auto;padding:10px 16px calc(20px + env(safe-area-inset-bottom));border-radius:24px 24px 0 0;background:#fff;box-shadow:0 -24px 60px rgba(4,28,21,.18)}.mobile-sheet-handle{width:42px;height:4px;margin:0 auto 13px;border-radius:999px;background:#dce2de}.mobile-sheet-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:3px 1px 13px}.mobile-sheet-head h2{margin:3px 0 0;font-size:20px}.mobile-more-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.mobile-more-grid>button,.mobile-settings-link{display:grid;grid-template-columns:40px minmax(0,1fr) auto;align-items:center;gap:10px;min-height:70px;padding:11px;border:1px solid var(--line);border-radius:14px;background:#fff;color:var(--ink);text-align:left}.mobile-more-grid>button.active{border-color:#acd2c2;background:#edf8f3}.mobile-more-grid>button>span{width:38px;height:38px;display:grid;place-items:center;border-radius:11px;background:var(--mint-soft);color:var(--forest)}.mobile-more-grid strong,.mobile-more-grid small,.mobile-settings-link strong,.mobile-settings-link small{display:block}.mobile-more-grid strong,.mobile-settings-link strong{font-size:11px}.mobile-more-grid small,.mobile-settings-link small{margin-top:3px;color:var(--muted);font-size:8px;line-height:1.3}.mobile-settings-link{width:100%;margin-top:9px;background:#f8faf8}.goal-command-grid,.analytics-main-grid{grid-template-columns:1fr}.analytics-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.goal-hero-card,.analytics-hero{grid-template-columns:1fr}.goal-hero-card .light-action{width:100%;justify-content:center}.goal-hero-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.analytics-score-ring{width:120px;justify-self:start}.calendar-layout{grid-template-columns:1fr}.calendar-board{padding:13px;overflow:hidden}.calendar-weekdays,.calendar-grid{width:100%;min-width:0!important;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px}.calendar-day{min-height:59px;padding:4px}.calendar-side{grid-template-columns:1fr}.calendar-event{height:7px;min-height:7px}.calendar-event span,.calendar-event i{display:none}.credit-card-grid,.debt-grid,.recurring-grid{grid-template-columns:1fr}.credit-section,.recurring-section{padding:16px}}
 @media(max-width:560px){.main-area{padding:16px 12px 36px}.topbar{align-items:flex-start;gap:10px}.topbar h1{font-size:23px}.period-pill,.save-status{display:none}.topbar .primary-action{width:46px;height:46px;border-radius:14px}.page-card,.section-card,.calendar-board,.credit-section,.recurring-section{border-radius:16px}.calendar-kpis,.credit-kpis,.analytics-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.calendar-kpis article,.credit-kpis article,.analytics-kpis article{min-height:105px;padding:13px}.calendar-heading h2,.credit-heading h2,.page-intro h2{font-size:22px}.calendar-heading p:last-child,.credit-heading p:last-child,.page-intro p{font-size:9px}.calendar-day{min-height:53px;padding:3px;border-radius:8px}.calendar-day-number{width:19px;height:19px;font-size:7px}.calendar-weekdays span{font-size:6px}.goal-hero-card,.analytics-hero{padding:22px 18px;border-radius:18px}.goal-hero-card h2,.analytics-hero h2{font-size:25px}.goal-hero-metrics{grid-template-columns:1fr;gap:6px}.emergency-card,.wealth-mini-card,.goals-workspace,.analytics-main-grid .section-card,.recommendations-card,.wealth-history-card{padding:16px}.smart-goals-grid{grid-template-columns:1fr}.smart-goal-card{min-height:0}.wealth-breakdown,.wealth-breakdown.analytics{grid-template-columns:1fr 1fr}.comparison-grid{grid-template-columns:1fr}.trend-list>div{grid-template-columns:36px minmax(0,1fr) auto}.trend-list>div>i{grid-column:2/-1;justify-self:start}.unusual-list>div{grid-template-columns:32px minmax(0,1fr)}.unusual-list>div>b{grid-column:2;justify-self:start}.recommendation-grid{grid-template-columns:1fr}.mobile-more-grid{grid-template-columns:1fr}.mobile-nav{min-height:78px}.mobile-nav button{min-height:60px}.mobile-nav small{font-size:9.5px!important}}
+
+/* Clara 3.6 — PWA */
+.save-status.offline { color:#9b6514; background:#fff7e8; border-color:#ead4aa; }
+.save-status.offline i { background:#d49432; }
+.pwa-install-backdrop { position:fixed; z-index:180; inset:0; display:grid; place-items:center; padding:18px; background:rgba(5,28,22,.58); backdrop-filter:blur(9px); }
+.pwa-install-card { position:relative; width:min(100%,460px); padding:30px; border:1px solid rgba(255,255,255,.84); border-radius:26px; background:#fff; box-shadow:0 35px 110px rgba(4,31,23,.35); }
+.pwa-install-icon { width:74px; height:74px; display:grid; place-items:center; margin-bottom:20px; border-radius:23px; background:#0c2d25; box-shadow:0 14px 34px rgba(12,45,37,.20); }
+.pwa-install-icon .brand-name { display:none; }
+.pwa-install-icon .brand-mark { width:42px; height:42px; padding:8px; border-radius:13px; gap:4px; }
+.pwa-install-icon .brand-mark i:nth-child(1){height:10px}.pwa-install-icon .brand-mark i:nth-child(2){height:18px}.pwa-install-icon .brand-mark i:nth-child(3){height:26px}
+.pwa-install-card h2 { margin:5px 0 10px; font-size:29px; line-height:1.05; letter-spacing:-.045em; }
+.pwa-install-card > p:not(.eyebrow) { margin:0; color:var(--muted); font-size:12px; line-height:1.65; }
+.pwa-install-benefits { display:grid; gap:8px; margin:21px 0; }
+.pwa-install-benefits span { display:flex; align-items:center; gap:10px; min-height:42px; padding:9px 12px; border:1px solid #e3e9e5; border-radius:12px; background:#f8faf8; color:#30473f; font-size:11px; font-weight:700; }
+.pwa-install-benefits svg { color:var(--forest); }
+.pwa-install-actions { display:grid; grid-template-columns:.72fr 1fr; gap:9px; }
+.pwa-install-actions button { min-height:48px; justify-content:center; }
+.pwa-platform-note { display:block; margin-top:13px; color:#7d8882; font-size:9px; line-height:1.5; }
+.ios-guide { padding-top:30px; }
+.ios-install-steps { display:grid; gap:9px; margin:22px 0; }
+.ios-install-steps > span { display:grid; grid-template-columns:30px 34px minmax(0,1fr); align-items:center; gap:9px; min-height:65px; padding:10px 12px; border:1px solid var(--line); border-radius:14px; background:#fafbf9; }
+.ios-install-steps b { width:28px; height:28px; display:grid; place-items:center; border-radius:999px; background:var(--forest); color:#fff; font-size:10px; }
+.ios-install-steps svg { color:var(--forest); }
+.ios-install-steps strong,.ios-install-steps small { display:block; }
+.ios-install-steps strong { font-size:11px; }
+.ios-install-steps small { margin-top:3px; color:var(--muted); font-size:9px; line-height:1.4; }
+.ios-guide-done { width:100%; justify-content:center; min-height:48px; }
+.pwa-settings-card { display:grid; gap:10px; margin-top:16px; padding:15px; border:1px solid #dfe7e2; border-radius:16px; background:linear-gradient(145deg,#f8fbf9,#f2f7f4); }
+.pwa-settings-head { display:flex; align-items:center; gap:10px; }
+.pwa-settings-head > span { width:38px; height:38px; display:grid; place-items:center; border-radius:11px; background:var(--mint-soft); color:var(--forest); }
+.pwa-settings-head strong,.pwa-settings-head small { display:block; }
+.pwa-settings-head strong { font-size:11px; }
+.pwa-settings-head small { margin-top:2px; color:var(--muted); font-size:8.5px; }
+.pwa-status-grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; }
+.pwa-status-grid > span { display:grid; grid-template-columns:22px 1fr; align-items:center; padding:9px; border:1px solid #e4e9e6; border-radius:11px; background:#fff; }
+.pwa-status-grid svg { grid-row:1/3; color:var(--forest); }
+.pwa-status-grid small,.pwa-status-grid strong { display:block; }
+.pwa-status-grid small { color:var(--muted); font-size:7.5px; }
+.pwa-status-grid strong { margin-top:1px; font-size:9px; }
+.pwa-action { width:100%; display:grid; grid-template-columns:35px minmax(0,1fr) auto; align-items:center; gap:9px; min-height:55px; padding:9px 10px; border:1px solid #dfe7e2; border-radius:12px; background:#fff; color:var(--ink); text-align:left; cursor:pointer; }
+.pwa-action > svg { color:var(--forest); }
+.pwa-action strong,.pwa-action small { display:block; }
+.pwa-action strong { font-size:10px; }
+.pwa-action small { margin-top:2px; color:var(--muted); font-size:8px; line-height:1.35; }
+.pwa-toggle { width:34px; height:20px; display:flex; align-items:center; padding:2px; border-radius:999px; background:#d7dfda; transition:background 150ms ease; }
+.pwa-toggle i { width:16px; height:16px; border-radius:50%; background:#fff; box-shadow:0 2px 7px rgba(0,0,0,.12); transition:transform 150ms ease; }
+.pwa-toggle.on { background:#24735e; }
+.pwa-toggle.on i { transform:translateX(14px); }
+.pwa-test-button { justify-self:start; padding:0; border:0; background:transparent; color:var(--forest); font-size:9px; font-weight:800; cursor:pointer; }
+.pwa-settings-message { margin:0; padding:8px 10px; border-radius:9px; background:#eef7f2; color:#325a4e; font-size:8.5px; line-height:1.4; }
+
+@media (display-mode: standalone) {
+  html, body { min-height:100%; background:#f5f5ef; }
+}
+@media (display-mode: standalone) and (max-width:900px) {
+  .main-area { padding-top:calc(20px + env(safe-area-inset-top)); }
+  .mobile-more-sheet { padding-bottom:calc(24px + env(safe-area-inset-bottom)); }
+}
+@media (max-width:560px) {
+  .pwa-install-backdrop { align-items:end; padding:0; }
+  .pwa-install-card { width:100%; padding:25px 19px calc(20px + env(safe-area-inset-bottom)); border-radius:25px 25px 0 0; }
+  .pwa-install-card h2 { font-size:25px; }
+  .pwa-install-icon { width:64px; height:64px; border-radius:20px; }
+  .pwa-install-actions { grid-template-columns:1fr 1.25fr; }
+  .pwa-install-actions button { min-height:50px; }
+  .pwa-status-grid { grid-template-columns:1fr 1fr; }
+}

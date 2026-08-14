@@ -18,6 +18,15 @@ import {
 import { createDatabase, runInTransaction } from "./database.js";
 import { getFinanceData } from "./finance-data.js";
 import {
+  pwaPublicConfig,
+  pushStatus,
+  savePushSubscription,
+  removePushSubscription,
+  sendWelcomeNotification,
+  sendUserNotification,
+  runFinancialReminders,
+} from "./pwa.js";
+import {
   createTransaction as engineCreateTransaction,
   createTransfer as engineCreateTransfer,
   updateBudget as engineUpdateBudget,
@@ -388,6 +397,66 @@ export function createApp({ databasePath } = {}) {
     try {
       await database.ping();
       response.json({ status: "ok", database: database.provider });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+
+  app.get("/api/pwa/config", (_request, response) => {
+    response.json(pwaPublicConfig());
+  });
+
+  app.get("/api/pwa/status", protect, async (request, response, next) => {
+    try {
+      response.json(await pushStatus(database, request.auth.user.id));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/pwa/subscribe", protect, async (request, response, next) => {
+    try {
+      const result = await savePushSubscription(database, request.auth.user.id, request.body || {}, request.get("user-agent") || "");
+      await sendWelcomeNotification(database, request.auth.user.id);
+      response.status(201).json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.delete("/api/pwa/subscribe", protect, async (request, response, next) => {
+    try {
+      response.json(await removePushSubscription(database, request.auth.user.id, request.body?.endpoint));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/pwa/test", protect, async (request, response, next) => {
+    try {
+      const result = await sendUserNotification(database, request.auth.user.id, {
+        title: "Notificación de prueba",
+        body: "Clara puede avisarte de compromisos, pagos y fechas importantes.",
+        url: "/?view=calendario",
+        tag: "clara-push-test",
+        badge: 1,
+      });
+      response.json(result);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/pwa/reminders/run", async (request, response, next) => {
+    try {
+      const expected = String(process.env.PWA_CRON_SECRET || "").trim();
+      const received = String(request.get("x-clara-cron-secret") || request.query?.secret || "").trim();
+      if (!expected || !received || expected !== received) {
+        response.status(401).json({ error: "No autorizado." });
+        return;
+      }
+      response.json(await runFinancialReminders(database));
     } catch (error) {
       next(error);
     }
