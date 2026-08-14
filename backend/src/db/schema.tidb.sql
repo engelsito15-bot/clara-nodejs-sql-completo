@@ -337,4 +337,3 @@ CREATE INDEX IF NOT EXISTS idx_liability_payments_user ON liability_payments(use
 CREATE INDEX IF NOT EXISTS idx_card_consumptions_user_date ON credit_card_consumptions(user_id, purchase_date);
 CREATE INDEX IF NOT EXISTS idx_goal_contributions_user_goal ON goal_contributions(user_id, goal_id);
 CREATE INDEX IF NOT EXISTS idx_financial_snapshots_user_date ON financial_snapshots(user_id, snapshot_date);
-CREATE INDEX IF NOT EXISTS idx_goals_user_status_priority ON goals(user_id, status, priority, due_date);
