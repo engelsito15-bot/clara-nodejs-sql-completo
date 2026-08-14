@@ -14,6 +14,7 @@ import {
   updateRecurringPayment,
   deleteRecurringPayment,
   markRecurringPaymentPaid,
+  createGoal, updateGoal, deleteGoal, contributeToGoal,
 } from "../src/finance-engine.js";
 import { getFinanceData } from "../src/finance-data.js";
 
@@ -436,4 +437,24 @@ test("Clara 3.3 controla tarjetas, deudas y pagos sin duplicarlos como gasto", a
   assert.equal(data.summary.periodExpenses, 100000, "Pagar pasivos no debe duplicar el consumo ya registrado como gasto");
   assert.equal(data.accounts.find((item) => item.id === account.id).balance, 3550000);
   database.close();
+});
+
+
+test("Clara 3.4 planifica metas y mantiene los aportes dentro del patrimonio", async () => {
+  const database=createSqliteDatabase(":memory:"); const userId=await createUser(database,{username:"metas34",planningPeriod:"biweekly"});
+  await database.run("UPDATE user_profiles SET income_type='fixed',income_frequency='biweekly',income_amount=2000000,fixed_expenses=800000 WHERE user_id=?",[userId]);
+  await createAccount(database,userId,{institutionType:"bank",institutionName:"Banreservas",productType:"payroll",amount:"20000",currencyCode:"DOP"});
+  let data=await getFinanceData(database,userId); const account=data.accounts[0],before=data.summary.netWorth; const due=new Date();due.setMonth(due.getMonth()+4);const dueDate=due.toISOString().slice(0,10);
+  await createGoal(database,userId,{name:"Fondo de emergencia",targetAmount:"24000",dueDate,priority:"1",goalType:"emergency",currencyCode:"DOP",sharedReady:"true"});
+  data=await getFinanceData(database,userId); assert.equal(data.goals[0].priority,1);assert.ok(data.goals[0].requiredPerPeriod>0);assert.equal(data.emergencyFund.targetAmount,2400000);assert.equal(data.goals[0].sharedReady,true);
+  await contributeToGoal(database,userId,{goalId:data.goals[0].id,accountId:account.id,amount:"4000",contributionDate:new Date().toISOString().slice(0,10)});
+  data=await getFinanceData(database,userId);assert.equal(data.goals[0].currentAmount,400000);assert.equal(data.goalContributions.length,1);assert.equal(data.summary.periodExpenses,0);assert.equal(data.summary.netWorth,before);
+  await updateGoal(database,userId,{goalId:data.goals[0].id,name:"Fondo esencial",targetAmount:"30000",dueDate,priority:"1",goalType:"emergency",currencyCode:"DOP"});data=await getFinanceData(database,userId);assert.equal(data.goals[0].name,"Fondo esencial");await deleteGoal(database,userId,{goalId:data.goals[0].id});data=await getFinanceData(database,userId);assert.equal(data.goals.length,0);database.close();
+});
+
+test("Clara 3.5 produce insights y proyecciones basados en datos registrados", async () => {
+  const database=createSqliteDatabase(":memory:");const userId=await createUser(database,{username:"insights35",planningPeriod:"monthly"});await database.run("UPDATE user_profiles SET income_type='fixed',income_frequency='monthly',income_amount=5000000,fixed_expenses=1800000,emergency_savings=3600000,savings_target_percent=15 WHERE user_id=?",[userId]);
+  await createAccount(database,userId,{institutionType:"bank",institutionName:"Popular",productType:"payroll",amount:"30000",currencyCode:"DOP"});let data=await getFinanceData(database,userId);const account=data.accounts[0],food=data.categories.find(i=>i.id===2),now=new Date(),thisDate=now.toISOString().slice(0,10),prev=new Date(now);prev.setMonth(prev.getMonth()-1);prev.setDate(10);
+  await createTransaction(database,userId,{type:"income",description:"Nómina",amount:"50000",accountId:account.id,transactionDate:thisDate});await createTransaction(database,userId,{type:"expense",description:"Supermercado actual",amount:"8000",accountId:account.id,categoryId:food.id,transactionDate:thisDate});await createTransaction(database,userId,{type:"expense",description:"Supermercado anterior",amount:"4000",accountId:account.id,categoryId:food.id,transactionDate:prev.toISOString().slice(0,10)});
+  data=await getFinanceData(database,userId);assert.ok(data.analytics.claraIndex>=0&&data.analytics.claraIndex<=100);assert.ok(data.analytics.recommendations.length>0);assert.ok(data.analytics.projectedMonthExpenses>=data.analytics.currentMonth.expenses);assert.ok(data.analytics.categoryTrends.some(i=>i.name==="Alimentación"));assert.ok(Array.isArray(data.wealth.accountEvolution));assert.ok(Array.isArray(data.wealth.snapshots));assert.equal(data.summary.claraIndex,data.analytics.claraIndex);database.close();
 });

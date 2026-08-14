@@ -212,6 +212,34 @@ function periodFixedExpenses(profile, period) {
   return period.mode === "biweekly" ? Math.round(amount / 2) : amount;
 }
 
+function shiftMonthDate(dateValue, offset) {
+  const [year, month, day] = String(dateValue).slice(0, 10).split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1 + Number(offset || 0), 1));
+  const y = date.getUTCFullYear(); const m = date.getUTCMonth() + 1;
+  return isoFromParts(y, m, Math.min(day, daysInMonth(y, m)));
+}
+
+function previousPeriodBounds(planningPeriod, period) {
+  if (planningPeriod !== "biweekly") return monthBounds(shiftMonthDate(period.today, -1));
+  const [year, month] = period.today.split("-").map(Number);
+  const isQ1 = period.key.endsWith("Q1");
+  if (!isQ1) return { start: isoFromParts(year, month, 1), end: isoFromParts(year, month, 15) };
+  const prev = new Date(Date.UTC(year, month - 2, 1));
+  const y = prev.getUTCFullYear(); const m = prev.getUTCMonth() + 1;
+  return { start: isoFromParts(y, m, 16), end: isoFromParts(y, m, daysInMonth(y, m)) };
+}
+
+function expectedMonthlyIncome(profile) {
+  const amount = normalizeNumber(profile.incomeAmount);
+  if (!amount) return 0;
+  if (profile.incomeFrequency === "weekly") return Math.round(amount * 4.33);
+  if (profile.incomeFrequency === "biweekly") return amount * 2;
+  return amount;
+}
+function goalPriorityLabel(value) { return Number(value) === 1 ? "Alta" : Number(value) === 3 ? "Baja" : "Media"; }
+function goalTypeLabel(value) { return ({ general:"Meta general", emergency:"Fondo de emergencia", purchase:"Compra", travel:"Viaje", education:"Educación", debt:"Salir de deuda", investment:"Inversión", other:"Otra" })[value] || "Meta"; }
+function clampScore(value) { return Math.max(0, Math.min(100, Math.round(Number(value || 0)))); }
+
 export async function getFinanceData(database, userId) {
   const userSettings = await database.get(
     `SELECT u.currency_code AS currencyCode,
@@ -221,6 +249,9 @@ export async function getFinanceData(database, userId) {
       COALESCE(p.income_amount, 0) AS incomeAmount,
       COALESCE(p.fixed_expenses, 0) AS fixedExpenses,
       COALESCE(p.savings_target_percent, 10) AS savingsTargetPercent,
+      COALESCE(p.emergency_savings, 0) AS emergencySavings,
+      COALESCE(p.primary_goal, '') AS primaryGoal,
+      COALESCE(p.financial_confidence, 3) AS financialConfidence,
       p.payday_one AS paydayOne,
       p.payday_two AS paydayTwo
      FROM users u
@@ -237,6 +268,9 @@ export async function getFinanceData(database, userId) {
     incomeAmount: normalizeNumber(userSettings?.incomeAmount),
     fixedExpenses: normalizeNumber(userSettings?.fixedExpenses),
     savingsTargetPercent: normalizeNumber(userSettings?.savingsTargetPercent),
+    emergencySavings: normalizeNumber(userSettings?.emergencySavings),
+    primaryGoal: userSettings?.primaryGoal || "",
+    financialConfidence: normalizeNumber(userSettings?.financialConfidence),
     paydayOne: userSettings?.paydayOne ?? null,
     paydayTwo: userSettings?.paydayTwo ?? null,
   };
@@ -354,12 +388,22 @@ export async function getFinanceData(database, userId) {
   );
 
   const goals = await database.all(
-    `SELECT id, name, target_amount AS targetAmount,
-      current_amount AS currentAmount, due_date AS dueDate, color
+    `SELECT id, name, target_amount AS targetAmount, current_amount AS currentAmount, due_date AS dueDate, color,
+      COALESCE(priority, 2) AS priority, COALESCE(goal_type, 'general') AS goalType,
+      COALESCE(currency_code, ?) AS currencyCode, COALESCE(status, 'active') AS status,
+      COALESCE(note, '') AS note, COALESCE(shared_scope, 'personal') AS sharedScope, shared_group_id AS sharedGroupId,
+      created_at AS createdAt, updated_at AS updatedAt
      FROM goals
-     WHERE user_id = ?
-     ORDER BY created_at`,
-    [userId],
+     WHERE user_id = ? AND COALESCE(status, 'active') <> 'archived'
+     ORDER BY CASE COALESCE(status,'active') WHEN 'active' THEN 0 ELSE 1 END, COALESCE(priority,2), due_date, created_at`,
+    [primaryCurrency, userId],
+  );
+  const goalContributionRows = await database.all(
+    `SELECT gc.id, gc.goal_id AS goalId, gc.account_id AS accountId, gc.amount, gc.contribution_date AS contributionDate,
+      COALESCE(gc.note, '') AS note, gc.created_at AS createdAt, a.name AS accountName, COALESCE(a.currency_code, ?) AS currencyCode
+     FROM goal_contributions gc JOIN accounts a ON a.id=gc.account_id AND a.user_id=gc.user_id
+     WHERE gc.user_id=? ORDER BY gc.contribution_date DESC, gc.id DESC LIMIT 500`,
+    [primaryCurrency, userId],
   );
 
 
@@ -531,13 +575,31 @@ export async function getFinanceData(database, userId) {
     createdAt: timestampText(adjustment.createdAt),
   }));
 
-  const normalizedGoals = goals.map((goal) => ({
-    ...goal,
-    id: Number(goal.id),
-    targetAmount: normalizeNumber(goal.targetAmount),
-    currentAmount: normalizeNumber(goal.currentAmount),
-    dueDate: dateText(goal.dueDate),
+  const goalContributions = goalContributionRows.map((item) => ({
+    ...item, id:Number(item.id), goalId:Number(item.goalId), accountId:Number(item.accountId), amount:normalizeNumber(item.amount),
+    contributionDate:dateText(item.contributionDate), createdAt:timestampText(item.createdAt), currencyCode:String(item.currencyCode||primaryCurrency).toUpperCase(),
   }));
+  const ninetyDaysAgo = addDays(period.today, -90);
+  const normalizedGoals = goals.map((goal) => {
+    const targetAmount=normalizeNumber(goal.targetAmount), currentAmount=normalizeNumber(goal.currentAmount);
+    const remainingAmount=Math.max(targetAmount-currentAmount,0); const dueDate=dateText(goal.dueDate);
+    const rawDays = dueDate ? Math.ceil((utcDate(dueDate)-utcDate(period.today))/86400000) : 0;
+    const daysRemaining=Math.max(0,rawDays+1);
+    const periodsRemaining=remainingAmount<=0?0:Math.max(1,planningPeriod==='biweekly'?Math.ceil(daysRemaining/15):Math.ceil(daysRemaining/30.44));
+    const requiredPerPeriod=periodsRemaining?Math.ceil(remainingAmount/periodsRemaining):0;
+    const requiredMonthly=daysRemaining>0?Math.ceil((remainingAmount/daysRemaining)*30.44):remainingAmount;
+    const requiredBiweekly=daysRemaining>0?Math.ceil((remainingAmount/daysRemaining)*15):remainingAmount;
+    const recent=goalContributions.filter((item)=>item.goalId===Number(goal.id)&&item.contributionDate>=ninetyDaysAgo&&item.contributionDate<=period.today);
+    const recentTotal=recent.reduce((sum,item)=>sum+item.amount,0); const averageMonthlyPace=recentTotal?Math.round(recentTotal/3):0;
+    const estimatedDays=averageMonthlyPace>0&&remainingAmount>0?Math.ceil(remainingAmount/(averageMonthlyPace/30.44)):0;
+    const estimatedCompletionDate=remainingAmount<=0?dueDate:estimatedDays?addDays(period.today,Math.min(estimatedDays,3650)):'';
+    const status=String(goal.status||'active');
+    return {...goal,id:Number(goal.id),targetAmount,currentAmount,remainingAmount,dueDate,priority:Number(goal.priority||2),priorityLabel:goalPriorityLabel(goal.priority),
+      goalType:goal.goalType||'general',goalTypeLabel:goalTypeLabel(goal.goalType||'general'),currencyCode:String(goal.currencyCode||primaryCurrency).toUpperCase(),status,
+      sharedGroupId:goal.sharedGroupId?Number(goal.sharedGroupId):null,sharedReady:goal.sharedScope==='shared-ready'||Boolean(goal.sharedGroupId),createdAt:timestampText(goal.createdAt),updatedAt:timestampText(goal.updatedAt),
+      progress:targetAmount?Math.min(100,Math.round((currentAmount/targetAmount)*100)):0,daysRemaining,periodsRemaining,requiredPerPeriod,requiredMonthly,requiredBiweekly,averageMonthlyPace,estimatedCompletionDate,
+      projectionStatus:remainingAmount<=0?'completed':dueDate<period.today?'overdue':averageMonthlyPace<=0?'new':averageMonthlyPace>=requiredMonthly?'on-track':'behind'};
+  });
 
 
   const recurringPayments = recurringRows.map((item) => ({
@@ -608,7 +670,7 @@ export async function getFinanceData(database, userId) {
   const cashflowRows = await database.all(
     `SELECT currency_code AS currencyCode,
       COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS income,
-      COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expenses
+      COALESCE(SUM(CASE WHEN type = 'expense' AND COALESCE(source,'MANUAL') <> 'GOAL' AND description NOT LIKE 'Aporte:%' AND description NOT LIKE 'Reserva:%' THEN amount ELSE 0 END), 0) AS expenses
      FROM transactions
      WHERE user_id = ? AND transaction_date BETWEEN ? AND ?
      GROUP BY currency_code`,
@@ -856,7 +918,59 @@ export async function getFinanceData(database, userId) {
   const monthlyDebtCommitment = creditCards.filter((card) => card.currencyCode === primaryCurrency).reduce((sum, card) => sum + Math.min(card.minimumPayment, card.currentBalance), 0)
     + debts.filter((debt) => debt.currencyCode === primaryCurrency).reduce((sum, debt) => sum + Math.min(debt.regularPayment, debt.currentBalance), 0);
   const liabilitiesTotal = creditUsedTotal + debtBalanceTotal;
-  const netWorth = primaryBalance - liabilitiesTotal;
+  const goalReservesPrimary = normalizedGoals.filter((goal)=>goal.currencyCode===primaryCurrency).reduce((sum,goal)=>sum+goal.currentAmount,0);
+  const netWorth = primaryBalance + goalReservesPrimary - liabilitiesTotal;
+
+  const emergencyGoal=normalizedGoals.find((goal)=>goal.goalType==='emergency'&&goal.status!=='archived')||null;
+  const emergencyCurrent=emergencyGoal?.currentAmount||profile.emergencySavings||0;
+  const monthlyEssentialExpenses=Math.max(profile.fixedExpenses||0,0);
+  const emergencyRecommended=emergencyGoal?.targetAmount||monthlyEssentialExpenses*3;
+  const emergencyCoverageMonths=monthlyEssentialExpenses>0?emergencyCurrent/monthlyEssentialExpenses:0;
+  const emergencyFund={goalId:emergencyGoal?.id||null,currentAmount:emergencyCurrent,targetAmount:emergencyRecommended,coverageMonths:Number(emergencyCoverageMonths.toFixed(1)),recommendedMonths:3,percentage:emergencyRecommended?Math.min(100,Math.round((emergencyCurrent/emergencyRecommended)*100)):0,configured:Boolean(emergencyGoal||emergencyCurrent>0)};
+
+  async function cashflowForRange(start,end){
+    const row=await database.get(`SELECT COALESCE(SUM(CASE WHEN type='income' THEN amount ELSE 0 END),0) AS income,
+      COALESCE(SUM(CASE WHEN type='expense' AND COALESCE(source,'MANUAL')<>'GOAL' AND description NOT LIKE 'Aporte:%' AND description NOT LIKE 'Reserva:%' THEN amount ELSE 0 END),0) AS expenses
+      FROM transactions WHERE user_id=? AND transaction_date BETWEEN ? AND ? AND COALESCE(currency_code,?)=?`,[userId,start,end,primaryCurrency,primaryCurrency]);
+    const card=await database.get(`SELECT COALESCE(SUM(cc.amount),0) AS expenses FROM credit_card_consumptions cc JOIN credit_cards c ON c.id=cc.card_id AND c.user_id=cc.user_id WHERE cc.user_id=? AND cc.purchase_date BETWEEN ? AND ? AND COALESCE(c.currency_code,?)=?`,[userId,start,end,primaryCurrency,primaryCurrency]);
+    return {income:normalizeNumber(row?.income),expenses:normalizeNumber(row?.expenses)+normalizeNumber(card?.expenses)};
+  }
+  const currentMonthBounds=monthBounds(period.today), previousMonthBounds=monthBounds(shiftMonthDate(period.today,-1)), previousPeriod=previousPeriodBounds(planningPeriod,period);
+  const currentMonthFlow=await cashflowForRange(currentMonthBounds.start,currentMonthBounds.end), previousMonthFlow=await cashflowForRange(previousMonthBounds.start,previousMonthBounds.end);
+  const currentPeriodFlow=await cashflowForRange(period.start,period.end), previousPeriodFlow=await cashflowForRange(previousPeriod.start,previousPeriod.end);
+
+  async function categorySpendForRange(start,end){
+    const rows=await database.all(`SELECT category_id AS categoryId,COALESCE(SUM(amount),0) AS spent FROM transactions WHERE user_id=? AND type='expense' AND category_id IS NOT NULL AND COALESCE(source,'MANUAL')<>'GOAL' AND description NOT LIKE 'Aporte:%' AND description NOT LIKE 'Reserva:%' AND transaction_date BETWEEN ? AND ? AND COALESCE(currency_code,?)=? GROUP BY category_id`,[userId,start,end,primaryCurrency,primaryCurrency]);
+    const cards=await database.all(`SELECT cc.category_id AS categoryId,COALESCE(SUM(cc.amount),0) AS spent FROM credit_card_consumptions cc JOIN credit_cards c ON c.id=cc.card_id AND c.user_id=cc.user_id WHERE cc.user_id=? AND cc.category_id IS NOT NULL AND cc.purchase_date BETWEEN ? AND ? AND COALESCE(c.currency_code,?)=? GROUP BY cc.category_id`,[userId,start,end,primaryCurrency,primaryCurrency]);
+    const map=new Map(); for(const row of [...rows,...cards]) map.set(Number(row.categoryId),(map.get(Number(row.categoryId))||0)+normalizeNumber(row.spent)); return map;
+  }
+  const currentCategorySpend=await categorySpendForRange(period.start,period.end), previousCategorySpend=await categorySpendForRange(previousPeriod.start,previousPeriod.end);
+  const categoryMap=new Map(normalizedCategories.map((c)=>[c.id,c]));
+  const rootTotals=(source)=>{const totals=new Map();for(const [id,amount] of source){const c=categoryMap.get(id);const rootId=c?.parentId||id;totals.set(rootId,(totals.get(rootId)||0)+amount)}return totals};
+  const curRoots=rootTotals(currentCategorySpend), prevRoots=rootTotals(previousCategorySpend);
+  const categoryTrends=[...new Set([...curRoots.keys(),...prevRoots.keys()])].map((id)=>{const c=categoryMap.get(id);const current=curRoots.get(id)||0,previous=prevRoots.get(id)||0;return{categoryId:id,name:c?.name||'Otros',color:c?.color||'mint',current,previous,delta:previous>0?Math.round(((current-previous)/previous)*100):current>0?100:0}}).filter((i)=>i.current||i.previous).sort((a,b)=>b.current-a.current).slice(0,8);
+
+  const historyRows=await database.all(`SELECT id,description,amount,category_id AS categoryId,transaction_date AS transactionDate FROM transactions WHERE user_id=? AND type='expense' AND category_id IS NOT NULL AND COALESCE(source,'MANUAL')<>'GOAL' AND transaction_date BETWEEN ? AND ? AND COALESCE(currency_code,?)=? ORDER BY transaction_date,id LIMIT 180`,[userId,addDays(period.today,-90),period.today,primaryCurrency,primaryCurrency]);
+  const unusualExpenses=[], byCategory=new Map(); for(const row of historyRows){const id=Number(row.categoryId),h=byCategory.get(id)||[],amount=normalizeNumber(row.amount);if(h.length>=3){const avg=h.reduce((a,b)=>a+b,0)/h.length;if(amount>=Math.max(avg*1.8,50000)){const c=categoryMap.get(id);unusualExpenses.unshift({id:Number(row.id),description:row.description,amount,average:Math.round(avg),categoryId:id,categoryName:c?.name||'Gasto',date:dateText(row.transactionDate),multiplier:Number((amount/Math.max(avg,1)).toFixed(1))})}}h.push(amount);if(h.length>12)h.shift();byCategory.set(id,h)}
+
+  const monthlyIncomeReference=Math.max(expectedMonthlyIncome(profile),currentMonthFlow.income); const monthlySavingsAmount=currentMonthFlow.income-currentMonthFlow.expenses;
+  const savingsCapacityRate=currentMonthFlow.income>0?Math.round((monthlySavingsAmount/currentMonthFlow.income)*100):0;
+  const debtToIncomeRate=monthlyIncomeReference>0?Math.round((monthlyDebtCommitment/monthlyIncomeReference)*100):0; const fixedToIncomeRate=monthlyIncomeReference>0?Math.round((profile.fixedExpenses/monthlyIncomeReference)*100):0;
+  const todayDay=Number(period.today.slice(8,10)), monthDays=daysInMonth(currentMonthBounds.year,currentMonthBounds.month), elapsed=Math.max(todayDay/monthDays,.08);
+  const projectedMonthExpenses=Math.round(currentMonthFlow.expenses/elapsed); const projectedEndBalance=Math.max(0,primaryBalance+Math.max(monthlyIncomeReference-currentMonthFlow.income,0)-Math.max(projectedMonthExpenses-currentMonthFlow.expenses,0)-windowSummary(30).total);
+  const savingsScore=monthlyIncomeReference>0?Math.min(25,Math.max(0,(Math.max(savingsCapacityRate,0)/Math.max(profile.savingsTargetPercent||10,10))*25)):8;
+  const emergencyScore=Math.min(25,(Math.min(emergencyCoverageMonths,3)/3)*25); const debtScore=monthlyIncomeReference>0?Math.max(0,20*(1-Math.min(debtToIncomeRate/50,1))):10; const fixedScore=monthlyIncomeReference>0?Math.max(0,15*(1-Math.min(fixedToIncomeRate/75,1))):8; const budgetScore=Math.max(0,15-Math.min(budgetAlerts.length*4,12)-(safeToSpend<=0?3:0));
+  const claraIndex=clampScore(savingsScore+emergencyScore+debtScore+fixedScore+budgetScore); const claraIndexLabel=claraIndex>=80?'Muy bien organizado':claraIndex>=65?'En buen camino':claraIndex>=45?'Hay espacio para mejorar':'Necesita atención';
+  const recommendations=[]; if(emergencyCoverageMonths<1&&monthlyEssentialExpenses>0) recommendations.push({type:'emergency',title:'Fortalece tu respaldo',message:`Tu fondo cubre ${emergencyCoverageMonths.toFixed(1)} meses de gastos fijos. El primer objetivo es llegar a 1 mes.`,actionView:'metas'}); if(debtToIncomeRate>35) recommendations.push({type:'debt',title:'La deuda está presionando tu ingreso',message:`${debtToIncomeRate}% de tu ingreso mensual de referencia está comprometido en pagos de deuda.`,actionView:'credito'}); if(fixedToIncomeRate>60) recommendations.push({type:'fixed',title:'Revisa tus gastos fijos',message:`Tus gastos fijos representan cerca de ${fixedToIncomeRate}% del ingreso mensual de referencia.`,actionView:'presupuesto'}); if(budgetAlerts.length) recommendations.push({type:'budget',title:'Hay sobres que necesitan atención',message:`${budgetAlerts.length} categoría${budgetAlerts.length===1?' está':'s están'} por encima del 70% de su presupuesto.`,actionView:'presupuesto'}); if(savingsCapacityRate>=Math.max(profile.savingsTargetPercent||10,10)) recommendations.push({type:'positive',title:'Tu capacidad de ahorro va bien',message:`Este mes llevas una capacidad de ahorro estimada de ${savingsCapacityRate}%.`,actionView:'metas'}); if(!recommendations.length) recommendations.push({type:'plan',title:'Mantén el ritmo',message:'Tus números no muestran una alerta prioritaria. Sigue registrando movimientos para que Clara aprenda mejor tu patrón.',actionView:'analisis'});
+  const delta=(current,previous)=>previous>0?Math.round(((current-previous)/previous)*100):current>0?100:0;
+
+  const evolutionMonths=[]; let closingBalance=primaryBalance; for(let offset=0;offset>=-5;offset--){const bounds=monthBounds(shiftMonthDate(period.today,offset));evolutionMonths.push({key:bounds.start.slice(0,7),start:bounds.start,end:bounds.end,balance:closingBalance});let change=0;for(const tx of normalizedTransactions){if(tx.transactionDate<bounds.start||tx.transactionDate>bounds.end)continue;if(tx.currencyCode===primaryCurrency){if(tx.type==='income')change+=tx.amount;else if(tx.type==='expense')change-=tx.amount;else if(tx.type==='transfer')change-=tx.amount}if(tx.type==='transfer'&&tx.destinationCurrencyCode===primaryCurrency)change+=tx.destinationAmount||tx.amount}for(const adj of normalizedAdjustments){if(adj.adjustmentDate>=bounds.start&&adj.adjustmentDate<=bounds.end&&adj.currencyCode===primaryCurrency)change+=adj.newBalance-adj.previousBalance}for(const pay of liabilityPayments){if(pay.paymentDate>=bounds.start&&pay.paymentDate<=bounds.end&&pay.currencyCode===primaryCurrency)change-=pay.amount}closingBalance-=change} evolutionMonths.reverse();
+
+  if(database.provider==='tidb') await database.run(`INSERT INTO financial_snapshots (user_id,snapshot_date,primary_currency,liquid_balance,goal_reserves,liabilities,net_worth) VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE liquid_balance=VALUES(liquid_balance),goal_reserves=VALUES(goal_reserves),liabilities=VALUES(liabilities),net_worth=VALUES(net_worth),updated_at=CURRENT_TIMESTAMP`,[userId,period.today,primaryCurrency,primaryBalance,goalReservesPrimary,liabilitiesTotal,netWorth]);
+  else await database.run(`INSERT INTO financial_snapshots (user_id,snapshot_date,primary_currency,liquid_balance,goal_reserves,liabilities,net_worth) VALUES (?,?,?,?,?,?,?) ON CONFLICT(user_id,snapshot_date,primary_currency) DO UPDATE SET liquid_balance=excluded.liquid_balance,goal_reserves=excluded.goal_reserves,liabilities=excluded.liabilities,net_worth=excluded.net_worth,updated_at=CURRENT_TIMESTAMP`,[userId,period.today,primaryCurrency,primaryBalance,goalReservesPrimary,liabilitiesTotal,netWorth]);
+  const snapshotRows=await database.all(`SELECT snapshot_date AS date,liquid_balance AS liquidBalance,goal_reserves AS goalReserves,liabilities,net_worth AS netWorth FROM financial_snapshots WHERE user_id=? AND primary_currency=? ORDER BY snapshot_date DESC LIMIT 180`,[userId,primaryCurrency]); const snapshots=snapshotRows.map((r)=>({date:dateText(r.date),liquidBalance:normalizeNumber(r.liquidBalance),goalReserves:normalizeNumber(r.goalReserves),liabilities:normalizeNumber(r.liabilities),netWorth:normalizeNumber(r.netWorth)})).reverse();
+  const analytics={claraIndex,claraIndexLabel,currentMonth:currentMonthFlow,previousMonth:previousMonthFlow,currentPeriod:currentPeriodFlow,previousPeriod:previousPeriodFlow,monthExpenseDelta:delta(currentMonthFlow.expenses,previousMonthFlow.expenses),monthIncomeDelta:delta(currentMonthFlow.income,previousMonthFlow.income),periodExpenseDelta:delta(currentPeriodFlow.expenses,previousPeriodFlow.expenses),savingsCapacityRate,savingsCapacityAmount:monthlySavingsAmount,debtToIncomeRate,fixedToIncomeRate,projectedMonthExpenses,projectedEndBalance,categoryTrends,unusualExpenses:unusualExpenses.slice(0,6),recommendations,primaryRecommendation:recommendations[0]};
+  const wealth={liquidBalance:primaryBalance,goalReserves:goalReservesPrimary,liabilities:liabilitiesTotal,netWorth,snapshots,accountEvolution:evolutionMonths};
 
   const balanceHistory = [];
   for (const transaction of normalizedTransactions) {
@@ -931,6 +1045,10 @@ export async function getFinanceData(database, userId) {
     adjustments: normalizedAdjustments,
     balanceHistory: balanceHistory.slice(0, 400),
     goals: normalizedGoals,
+    goalContributions,
+    emergencyFund,
+    wealth,
+    analytics,
     recurringPayments,
     creditCards,
     debts,
@@ -1006,7 +1124,9 @@ export async function getFinanceData(database, userId) {
       debtBalanceTotal,
       liabilitiesTotal,
       monthlyDebtCommitment,
+      goalReserves: goalReservesPrimary,
       netWorth,
+      claraIndex,
     },
   };
 }

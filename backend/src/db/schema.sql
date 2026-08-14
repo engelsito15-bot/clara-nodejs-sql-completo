@@ -230,7 +230,40 @@ CREATE TABLE IF NOT EXISTS goals (
   current_amount INTEGER NOT NULL DEFAULT 0 CHECK (current_amount >= 0),
   due_date TEXT NOT NULL,
   color TEXT NOT NULL DEFAULT 'sun',
+  priority INTEGER NOT NULL DEFAULT 2,
+  goal_type TEXT NOT NULL DEFAULT 'general',
+  currency_code TEXT NOT NULL DEFAULT 'DOP',
+  status TEXT NOT NULL DEFAULT 'active',
+  note TEXT NOT NULL DEFAULT '',
+  shared_scope TEXT NOT NULL DEFAULT 'personal',
+  shared_group_id INTEGER,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS goal_contributions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  goal_id INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+  account_id INTEGER NOT NULL REFERENCES accounts(id),
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  contribution_date TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS financial_snapshots (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  snapshot_date TEXT NOT NULL,
+  primary_currency TEXT NOT NULL DEFAULT 'DOP',
+  liquid_balance INTEGER NOT NULL DEFAULT 0,
+  goal_reserves INTEGER NOT NULL DEFAULT 0,
+  liabilities INTEGER NOT NULL DEFAULT 0,
+  net_worth INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id, snapshot_date, primary_currency)
 );
 
 CREATE TABLE IF NOT EXISTS app_meta (
@@ -248,6 +281,9 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expiration ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_hidden_categories_user ON user_hidden_categories(user_id);
 CREATE INDEX IF NOT EXISTS idx_credit_cards_user_active ON credit_cards(user_id, is_active);
 CREATE INDEX IF NOT EXISTS idx_debts_user_active_due ON debts(user_id, is_active, next_due_date);
+CREATE INDEX IF NOT EXISTS idx_goal_contributions_user_goal ON goal_contributions(user_id, goal_id);
+CREATE INDEX IF NOT EXISTS idx_financial_snapshots_user_date ON financial_snapshots(user_id, snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_goals_user_status_priority ON goals(user_id, status, priority, due_date);
 CREATE INDEX IF NOT EXISTS idx_liability_payments_user ON liability_payments(user_id, liability_type, liability_id);
 
 PRAGMA optimize;

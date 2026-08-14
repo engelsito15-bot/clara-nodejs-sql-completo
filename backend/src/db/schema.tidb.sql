@@ -272,10 +272,48 @@ CREATE TABLE IF NOT EXISTS goals (
   current_amount BIGINT NOT NULL DEFAULT 0,
   due_date DATE NOT NULL,
   color VARCHAR(30) NOT NULL DEFAULT 'sun',
+  priority INT NOT NULL DEFAULT 2,
+  goal_type VARCHAR(30) NOT NULL DEFAULT 'general',
+  currency_code VARCHAR(10) NOT NULL DEFAULT 'DOP',
+  status VARCHAR(20) NOT NULL DEFAULT 'active',
+  note VARCHAR(500) NOT NULL DEFAULT '',
+  shared_scope VARCHAR(30) NOT NULL DEFAULT 'personal',
+  shared_group_id BIGINT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT chk_goals_target CHECK (target_amount > 0),
   CONSTRAINT chk_goals_current CHECK (current_amount >= 0),
   CONSTRAINT fk_goals_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS goal_contributions (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  goal_id BIGINT NOT NULL,
+  account_id BIGINT NOT NULL,
+  amount BIGINT NOT NULL,
+  contribution_date DATE NOT NULL,
+  note VARCHAR(500) NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT chk_goal_contribution_amount CHECK (amount > 0),
+  CONSTRAINT fk_goal_contributions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_goal_contributions_goal FOREIGN KEY (goal_id) REFERENCES goals(id) ON DELETE CASCADE,
+  CONSTRAINT fk_goal_contributions_account FOREIGN KEY (account_id) REFERENCES accounts(id)
+);
+
+CREATE TABLE IF NOT EXISTS financial_snapshots (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  snapshot_date DATE NOT NULL,
+  primary_currency VARCHAR(10) NOT NULL DEFAULT 'DOP',
+  liquid_balance BIGINT NOT NULL DEFAULT 0,
+  goal_reserves BIGINT NOT NULL DEFAULT 0,
+  liabilities BIGINT NOT NULL DEFAULT 0,
+  net_worth BIGINT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_financial_snapshot_user_date_currency (user_id, snapshot_date, primary_currency),
+  CONSTRAINT fk_financial_snapshots_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS app_meta (
@@ -297,3 +335,6 @@ CREATE INDEX IF NOT EXISTS idx_debts_user_active_due ON debts(user_id, is_active
 CREATE INDEX IF NOT EXISTS idx_liability_payments_user ON liability_payments(user_id, liability_type, liability_id);
 
 CREATE INDEX IF NOT EXISTS idx_card_consumptions_user_date ON credit_card_consumptions(user_id, purchase_date);
+CREATE INDEX IF NOT EXISTS idx_goal_contributions_user_goal ON goal_contributions(user_id, goal_id);
+CREATE INDEX IF NOT EXISTS idx_financial_snapshots_user_date ON financial_snapshots(user_id, snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_goals_user_status_priority ON goals(user_id, status, priority, due_date);

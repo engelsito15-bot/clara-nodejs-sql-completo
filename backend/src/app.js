@@ -28,6 +28,8 @@ import {
   deleteRecurringPayment as engineDeleteRecurringPayment,
   markRecurringPaymentPaid as engineMarkRecurringPaymentPaid,
   createGoal as engineCreateGoal,
+  updateGoal as engineUpdateGoal,
+  deleteGoal as engineDeleteGoal,
   contributeToGoal as engineContributeToGoal,
   createAccount as engineCreateAccount,
   updateAccount as engineUpdateAccount,
@@ -521,6 +523,12 @@ export function createApp({ databasePath } = {}) {
           break;
         case "goal":
           await engineCreateGoal(database, userId, payload);
+          break;
+        case "goal-update":
+          await engineUpdateGoal(database, userId, payload);
+          break;
+        case "goal-delete":
+          await engineDeleteGoal(database, userId, payload);
           break;
         case "goal-contribution":
           await engineContributeToGoal(database, userId, payload);

@@ -4,7 +4,7 @@ import { runInTransaction } from "./database.js";
 const ACCOUNT_PRODUCTS = new Set(["payroll", "savings", "checking", "certificate", "contribution", "wallet", "investment", "cash", "other"]);
 const INSTITUTION_TYPES = new Set(["bank", "cooperative", "association", "wallet", "cash", "investment", "other"]);
 const CURRENCY_CODES = new Set(["DOP", "USD", "EUR", "GBP", "MXN", "COP", "PEN", "BOB"]);
-const SOURCE_TYPES = new Set(["MANUAL", "ASSISTANT", "EMAIL", "IMPORT", "BANK_API"]);
+const SOURCE_TYPES = new Set(["MANUAL", "ASSISTANT", "EMAIL", "IMPORT", "BANK_API", "GOAL"]);
 const CATEGORY_COLORS = new Set(["forest", "coral", "sky", "lilac", "sun", "mint"]);
 const BUDGET_KINDS = new Set(["fixed", "flexible", "savings"]);
 const RECURRING_FREQUENCIES = new Set(["weekly", "biweekly", "monthly", "yearly"]);
@@ -592,52 +592,82 @@ export async function markRecurringPaymentPaid(database, userId, payload) {
 export async function createGoal(database, userId, payload) {
   const targetAmount = amountInCents(payload.targetAmount);
   const name = String(payload.name || "").trim();
+  const dueDate = validDate(payload.dueDate);
+  const priority = Math.min(3, Math.max(1, Number.parseInt(payload.priority || "2", 10) || 2));
+  const allowedGoalTypes = new Set(["general", "emergency", "purchase", "travel", "education", "debt", "investment", "other"]);
+  const goalType = allowedGoalTypes.has(String(payload.goalType || "general")) ? String(payload.goalType || "general") : "general";
+  const note = String(payload.note || "").trim().slice(0, 500);
+  const settings = await userFinanceSettings(database, userId);
+  const currencyCode = normalizeCurrency(payload.currencyCode, settings.currencyCode);
+  const sharedScope = booleanFlag(payload.sharedReady) ? "shared-ready" : "personal";
   if (!targetAmount || !name || !payload.dueDate) throw requestError("Completa el nombre, el monto y la fecha de la meta.");
+  if (dueDate < validDate()) throw requestError("La fecha de la meta no puede estar en el pasado.");
+  if (goalType === "emergency") {
+    const existing = await database.get("SELECT id FROM goals WHERE user_id=? AND goal_type='emergency' AND COALESCE(status,'active')='active' LIMIT 1", [userId]);
+    if (existing) throw requestError("Ya tienes un fondo de emergencia activo. Puedes editar esa meta.");
+  }
+  const color = priority === 1 ? "forest" : priority === 3 ? "sky" : goalType === "emergency" ? "mint" : "sun";
   await database.run(
-    "INSERT INTO goals (user_id, name, target_amount, current_amount, due_date, color) VALUES (?, ?, ?, 0, ?, 'coral')",
-    [userId, name, targetAmount, validDate(payload.dueDate)],
+    `INSERT INTO goals (user_id,name,target_amount,current_amount,due_date,color,priority,goal_type,currency_code,status,note,shared_scope,updated_at)
+     VALUES (?,?,?,0,?,?,?,?,?,'active',?,?,CURRENT_TIMESTAMP)`,
+    [userId,name,targetAmount,dueDate,color,priority,goalType,currencyCode,note,sharedScope],
   );
+}
+
+export async function updateGoal(database, userId, payload) {
+  const goalId = integerId(payload.goalId);
+  const targetAmount = amountInCents(payload.targetAmount);
+  const name = String(payload.name || "").trim();
+  const dueDate = validDate(payload.dueDate);
+  const priority = Math.min(3, Math.max(1, Number.parseInt(payload.priority || "2", 10) || 2));
+  const allowedGoalTypes = new Set(["general", "emergency", "purchase", "travel", "education", "debt", "investment", "other"]);
+  const goalType = allowedGoalTypes.has(String(payload.goalType || "general")) ? String(payload.goalType || "general") : "general";
+  const note = String(payload.note || "").trim().slice(0,500);
+  const settings = await userFinanceSettings(database,userId);
+  const nextCurrency = normalizeCurrency(payload.currencyCode, settings.currencyCode);
+  if (!goalId || !targetAmount || !name || !payload.dueDate) throw requestError("Completa los datos de la meta.");
+  const goal = await database.get("SELECT id,current_amount AS currentAmount,COALESCE(currency_code,?) AS currencyCode FROM goals WHERE id=? AND user_id=? AND COALESCE(status,'active')<>'archived'", [settings.currencyCode,goalId,userId]);
+  if (!goal) throw requestError("La meta no existe.",404);
+  if (targetAmount < Number(goal.currentAmount||0)) throw requestError("El objetivo no puede ser menor que lo que ya has reservado.");
+  if (Number(goal.currentAmount||0)>0 && normalizeCurrency(goal.currencyCode,settings.currencyCode)!==nextCurrency) throw requestError("No puedes cambiar la moneda de una meta que ya tiene aportes.");
+  if (goalType === "emergency") {
+    const duplicate = await database.get("SELECT id FROM goals WHERE user_id=? AND goal_type='emergency' AND COALESCE(status,'active')='active' AND id<>? LIMIT 1", [userId,goalId]);
+    if (duplicate) throw requestError("Ya tienes otro fondo de emergencia activo.");
+  }
+  const sharedScope = booleanFlag(payload.sharedReady) ? "shared-ready" : "personal";
+  const color = priority === 1 ? "forest" : priority === 3 ? "sky" : goalType === "emergency" ? "mint" : "sun";
+  await database.run(`UPDATE goals SET name=?,target_amount=?,due_date=?,priority=?,goal_type=?,currency_code=?,note=?,shared_scope=?,color=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?`, [name,targetAmount,dueDate,priority,goalType,nextCurrency,note,sharedScope,color,goalId,userId]);
+}
+
+export async function deleteGoal(database,userId,payload) {
+  const goalId=integerId(payload.goalId);
+  if(!goalId) throw requestError("Selecciona una meta válida.");
+  const goal=await database.get("SELECT id FROM goals WHERE id=? AND user_id=?",[goalId,userId]);
+  if(!goal) throw requestError("La meta no existe.",404);
+  await database.run("UPDATE goals SET status='archived',updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",[goalId,userId]);
 }
 
 export async function contributeToGoal(database, userId, payload) {
   const goalId = integerId(payload.goalId);
   const accountId = integerId(payload.accountId);
   const amount = amountInCents(payload.amount);
+  const contributionDate = validDate(payload.contributionDate || validDate());
+  const note = String(payload.note || "").trim().slice(0,500);
   if (!goalId || !accountId || !amount) throw requestError("Selecciona una meta, una cuenta y un monto.");
-
-  const settings = await userFinanceSettings(database, userId);
-  const transactionDate = validDate();
-
+  const settings = await userFinanceSettings(database,userId);
   await runInTransaction(database, async (transaction) => {
-    const goal = await transaction.get(
-      "SELECT id, name, target_amount AS targetAmount, current_amount AS currentAmount FROM goals WHERE id = ? AND user_id = ?",
-      [goalId, userId],
-    );
-    const account = await accountById(transaction, accountId, userId);
-    if (!goal || !account) throw requestError("La meta o la cuenta no existe.", 404);
-    if (Number(account.balance) < amount) throw requestError("La cuenta no tiene saldo suficiente.");
-    if (Number(goal.currentAmount) + amount > Number(goal.targetAmount)) throw requestError("El aporte supera lo que falta para completar la meta.");
-
-    const balanceAfter = Number(account.balance) - amount;
-    await transaction.run("UPDATE accounts SET balance = ? WHERE id = ? AND user_id = ?", [balanceAfter, accountId, userId]);
-    await transaction.run("UPDATE goals SET current_amount = current_amount + ? WHERE id = ? AND user_id = ?", [amount, goalId, userId]);
-    await transaction.run(
-      `INSERT INTO transactions
-        (user_id, type, description, amount, account_id, transaction_date, note,
-         source, currency_code, balance_after, period_key)
-       VALUES (?, 'expense', ?, ?, ?, ?, ?, 'MANUAL', ?, ?, ?)`,
-      [
-        userId,
-        `Aporte: ${goal.name}`,
-        amount,
-        accountId,
-        transactionDate,
-        "Ahorro reservado para una meta",
-        normalizeCurrency(account.currencyCode, settings.currencyCode),
-        balanceAfter,
-        periodKeyForDate(transactionDate, settings.planningPeriod),
-      ],
-    );
+    const goal=await transaction.get(`SELECT id,name,target_amount AS targetAmount,current_amount AS currentAmount,COALESCE(currency_code,?) AS currencyCode,COALESCE(status,'active') AS status FROM goals WHERE id=? AND user_id=?`,[settings.currencyCode,goalId,userId]);
+    const account=await accountById(transaction,accountId,userId);
+    if(!goal || !account || goal.status==='archived') throw requestError("La meta o la cuenta no existe.",404);
+    const accountCurrency=normalizeCurrency(account.currencyCode,settings.currencyCode); const goalCurrency=normalizeCurrency(goal.currencyCode,settings.currencyCode);
+    if(accountCurrency!==goalCurrency) throw requestError(`Esta meta está en ${goalCurrency}. Selecciona una cuenta con esa misma moneda.`);
+    if(Number(account.balance)<amount) throw requestError("La cuenta no tiene saldo suficiente.");
+    if(Number(goal.currentAmount)+amount>Number(goal.targetAmount)) throw requestError("El aporte supera lo que falta para completar la meta.");
+    const balanceAfter=Number(account.balance)-amount; const goalAfter=Number(goal.currentAmount)+amount;
+    await transaction.run("UPDATE accounts SET balance=? WHERE id=? AND user_id=?",[balanceAfter,accountId,userId]);
+    await transaction.run("UPDATE goals SET current_amount=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?",[goalAfter,goalAfter>=Number(goal.targetAmount)?'completed':'active',goalId,userId]);
+    await transaction.run("INSERT INTO goal_contributions (user_id,goal_id,account_id,amount,contribution_date,note) VALUES (?,?,?,?,?,?)",[userId,goalId,accountId,amount,contributionDate,note]);
+    await transaction.run(`INSERT INTO transactions (user_id,type,description,amount,account_id,transaction_date,note,source,currency_code,balance_after,period_key,external_ref) VALUES (?,'expense',?,?,?,?,?,'GOAL',?,?,?,?)`, [userId,`Reserva: ${goal.name}`,amount,accountId,contributionDate,note||'Ahorro reservado para una meta',goalCurrency,balanceAfter,periodKeyForDate(contributionDate,settings.planningPeriod),`goal:${goalId}:${Date.now()}`]);
   });
 }
 

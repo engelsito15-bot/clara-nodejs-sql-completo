@@ -57,6 +57,14 @@ function ensureSqliteMultiUserSchema(database) {
     ["transactions", "period_key", "TEXT NOT NULL DEFAULT ''"],
     ["transactions", "external_ref", "TEXT NOT NULL DEFAULT ''"],
     ["goals", "user_id", "INTEGER"],
+    ["goals", "priority", "INTEGER NOT NULL DEFAULT 2"],
+    ["goals", "goal_type", "TEXT NOT NULL DEFAULT 'general'"],
+    ["goals", "currency_code", "TEXT NOT NULL DEFAULT 'DOP'"],
+    ["goals", "status", "TEXT NOT NULL DEFAULT 'active'"],
+    ["goals", "note", "TEXT NOT NULL DEFAULT ''"],
+    ["goals", "shared_scope", "TEXT NOT NULL DEFAULT 'personal'"],
+    ["goals", "shared_group_id", "INTEGER"],
+    ["goals", "updated_at", "TEXT NOT NULL DEFAULT ''"],
     ["categories", "display_name", "TEXT NOT NULL DEFAULT ''"],
     ["categories", "user_id", "INTEGER"],
     ["categories", "parent_id", "INTEGER"],
@@ -121,6 +129,29 @@ function ensureSqliteMultiUserSchema(database) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS goal_contributions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      goal_id INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+      account_id INTEGER NOT NULL REFERENCES accounts(id),
+      amount INTEGER NOT NULL CHECK (amount > 0),
+      contribution_date TEXT NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS financial_snapshots (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      snapshot_date TEXT NOT NULL,
+      primary_currency TEXT NOT NULL DEFAULT 'DOP',
+      liquid_balance INTEGER NOT NULL DEFAULT 0,
+      goal_reserves INTEGER NOT NULL DEFAULT 0,
+      liabilities INTEGER NOT NULL DEFAULT 0,
+      net_worth INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, snapshot_date, primary_currency)
+    );
     CREATE TABLE IF NOT EXISTS account_balance_adjustments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -138,6 +169,9 @@ function ensureSqliteMultiUserSchema(database) {
     CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, transaction_date);
     CREATE INDEX IF NOT EXISTS idx_transactions_user_period ON transactions(user_id, period_key);
     CREATE INDEX IF NOT EXISTS idx_goals_user_due_date ON goals(user_id, due_date);
+    CREATE INDEX IF NOT EXISTS idx_goals_user_status_priority ON goals(user_id, status, priority, due_date);
+    CREATE INDEX IF NOT EXISTS idx_goal_contributions_user_goal ON goal_contributions(user_id, goal_id);
+    CREATE INDEX IF NOT EXISTS idx_financial_snapshots_user_date ON financial_snapshots(user_id, snapshot_date);
     CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets(user_id);
     CREATE INDEX IF NOT EXISTS idx_period_budgets_user_period ON period_budgets(user_id, period_key);
     CREATE INDEX IF NOT EXISTS idx_recurring_user_due ON recurring_payments(user_id, is_active, next_due_date);
@@ -156,6 +190,10 @@ function ensureSqliteMultiUserSchema(database) {
     UPDATE account_balance_adjustments
        SET adjustment_date = substr(created_at, 1, 10)
      WHERE COALESCE(adjustment_date, '') = '';
+    UPDATE goals SET currency_code = COALESCE((SELECT currency_code FROM users WHERE users.id = goals.user_id), 'DOP') WHERE COALESCE(currency_code, '') = '';
+    UPDATE goals SET status = 'active' WHERE COALESCE(status, '') = '';
+    UPDATE goals SET goal_type = 'general' WHERE COALESCE(goal_type, '') = '';
+    UPDATE goals SET shared_scope = 'personal' WHERE COALESCE(shared_scope, '') = '';
   `);
 
   if (accountCurrencyWasMissing) {
@@ -334,6 +372,14 @@ async function ensureTidbMultiUserSchema(connection) {
     ["transactions", "period_key", "VARCHAR(20) NOT NULL DEFAULT ''"],
     ["transactions", "external_ref", "VARCHAR(120) NOT NULL DEFAULT ''"],
     ["goals", "user_id", "BIGINT NULL"],
+    ["goals", "priority", "INT NOT NULL DEFAULT 2"],
+    ["goals", "goal_type", "VARCHAR(30) NOT NULL DEFAULT 'general'"],
+    ["goals", "currency_code", "VARCHAR(10) NOT NULL DEFAULT 'DOP'"],
+    ["goals", "status", "VARCHAR(20) NOT NULL DEFAULT 'active'"],
+    ["goals", "note", "VARCHAR(500) NOT NULL DEFAULT ''"],
+    ["goals", "shared_scope", "VARCHAR(30) NOT NULL DEFAULT 'personal'"],
+    ["goals", "shared_group_id", "BIGINT NULL"],
+    ["goals", "updated_at", "TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"],
     ["categories", "display_name", "VARCHAR(150) NOT NULL DEFAULT ''"],
     ["categories", "user_id", "BIGINT NULL"],
     ["categories", "parent_id", "BIGINT NULL"],
@@ -412,6 +458,25 @@ async function ensureTidbMultiUserSchema(connection) {
     CONSTRAINT fk_recurring_account FOREIGN KEY (account_id) REFERENCES accounts(id)
   )`);
 
+  await connection.query(`CREATE TABLE IF NOT EXISTS goal_contributions (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id BIGINT NOT NULL, goal_id BIGINT NOT NULL, account_id BIGINT NOT NULL, amount BIGINT NOT NULL,
+    contribution_date DATE NOT NULL, note VARCHAR(500) NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT chk_goal_contribution_amount CHECK (amount > 0),
+    CONSTRAINT fk_goal_contributions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_goal_contributions_goal FOREIGN KEY (goal_id) REFERENCES goals(id) ON DELETE CASCADE,
+    CONSTRAINT fk_goal_contributions_account FOREIGN KEY (account_id) REFERENCES accounts(id)
+  )`);
+
+  await connection.query(`CREATE TABLE IF NOT EXISTS financial_snapshots (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL, snapshot_date DATE NOT NULL,
+    primary_currency VARCHAR(10) NOT NULL DEFAULT 'DOP', liquid_balance BIGINT NOT NULL DEFAULT 0,
+    goal_reserves BIGINT NOT NULL DEFAULT 0, liabilities BIGINT NOT NULL DEFAULT 0, net_worth BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_financial_snapshot_user_date_currency (user_id, snapshot_date, primary_currency),
+    CONSTRAINT fk_financial_snapshots_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+
   await connection.query(`CREATE TABLE IF NOT EXISTS account_balance_adjustments (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     user_id BIGINT NOT NULL,
@@ -430,6 +495,10 @@ async function ensureTidbMultiUserSchema(connection) {
   await connection.query("UPDATE categories SET display_name = name WHERE COALESCE(display_name, '') = ''");
   await connection.query("UPDATE categories SET is_system = 1 WHERE user_id IS NULL AND id BETWEEN 1 AND 12");
   await connection.query("UPDATE account_balance_adjustments SET adjustment_date = DATE(created_at) WHERE adjustment_date IS NULL");
+  await connection.query("UPDATE goals g JOIN users u ON u.id=g.user_id SET g.currency_code=u.currency_code WHERE COALESCE(g.currency_code, '')=''");
+  await connection.query("UPDATE goals SET status='active' WHERE COALESCE(status, '')=''");
+  await connection.query("UPDATE goals SET goal_type='general' WHERE COALESCE(goal_type, '')=''");
+  await connection.query("UPDATE goals SET shared_scope='personal' WHERE COALESCE(shared_scope, '')=''");
 
   if (accountCurrencyWasMissing) {
     await connection.query(`
@@ -463,6 +532,9 @@ async function ensureTidbMultiUserSchema(connection) {
     "CREATE INDEX IF NOT EXISTS idx_transactions_user_date ON transactions(user_id, transaction_date)",
     "CREATE INDEX IF NOT EXISTS idx_transactions_user_period ON transactions(user_id, period_key)",
     "CREATE INDEX IF NOT EXISTS idx_goals_user_due_date ON goals(user_id, due_date)",
+    "CREATE INDEX IF NOT EXISTS idx_goals_user_status_priority ON goals(user_id, status, priority, due_date)",
+    "CREATE INDEX IF NOT EXISTS idx_goal_contributions_user_goal ON goal_contributions(user_id, goal_id)",
+    "CREATE INDEX IF NOT EXISTS idx_financial_snapshots_user_date ON financial_snapshots(user_id, snapshot_date)",
     "CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_period_budgets_user_period ON period_budgets(user_id, period_key)",
     "CREATE INDEX IF NOT EXISTS idx_recurring_user_due ON recurring_payments(user_id, is_active, next_due_date)",

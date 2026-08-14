@@ -8,6 +8,10 @@ const EMPTY_DATA = {
   adjustments: [],
   balanceHistory: [],
   goals: [],
+  goalContributions: [],
+  emergencyFund: { goalId: null, currentAmount: 0, targetAmount: 0, coverageMonths: 0, recommendedMonths: 3, percentage: 0, configured: false },
+  wealth: { liquidBalance: 0, goalReserves: 0, liabilities: 0, netWorth: 0, snapshots: [], accountEvolution: [] },
+  analytics: { claraIndex: 0, claraIndexLabel: "Sin datos suficientes", currentMonth: { income: 0, expenses: 0 }, previousMonth: { income: 0, expenses: 0 }, currentPeriod: { income: 0, expenses: 0 }, previousPeriod: { income: 0, expenses: 0 }, monthExpenseDelta: 0, monthIncomeDelta: 0, periodExpenseDelta: 0, savingsCapacityRate: 0, savingsCapacityAmount: 0, debtToIncomeRate: 0, fixedToIncomeRate: 0, projectedMonthExpenses: 0, projectedEndBalance: 0, categoryTrends: [], unusualExpenses: [], recommendations: [], primaryRecommendation: null },
   recurringPayments: [],
   creditCards: [],
   debts: [],
@@ -79,21 +83,24 @@ const EMPTY_DATA = {
     liabilitiesTotal: 0,
     monthlyDebtCommitment: 0,
     netWorth: 0,
+    goalReserves: 0,
+    claraIndex: 0,
   },
 };
 
 const navItems = [
   { id: "inicio", label: "Inicio", icon: "home" },
-  { id: "movimientos", label: "Movimientos", mobileLabel: "Mov.", icon: "activity" },
+  { id: "movimientos", label: "Movimientos", mobileLabel: "Movimientos", icon: "activity" },
   { id: "presupuesto", label: "Presupuesto", mobileLabel: "Plan", icon: "budget" },
   { id: "calendario", label: "Calendario", mobileLabel: "Agenda", icon: "calendar" },
   { id: "categorias", label: "Categorías", icon: "tags" },
   { id: "credito", label: "Crédito y deudas", mobileLabel: "Crédito", icon: "creditCard" },
   { id: "metas", label: "Metas", icon: "target" },
+  { id: "analisis", label: "Análisis", icon: "chart" },
   { id: "cuentas", label: "Cuentas", icon: "wallet" },
 ];
-
-const mobileNavItems = navItems.filter((item) => ["inicio", "movimientos", "calendario", "presupuesto", "credito", "cuentas"].includes(item.id));
+const mobileNavItems = navItems.filter((item) => ["inicio", "movimientos", "presupuesto", "calendario"].includes(item.id));
+const mobileMoreItems = navItems.filter((item) => ["categorias", "credito", "metas", "analisis", "cuentas"].includes(item.id));
 
 const iconPaths = {
   home: ["M3 10.5 12 3l9 7.5", "M5 9.5V21h14V9.5", "M9 21v-7h6v7"],
@@ -147,6 +154,8 @@ const iconPaths = {
   checkCircle: ["M22 11.1V12a10 10 0 1 1-5.9-9.1", "m9 11 3 3L22 4"],
   alertTriangle: ["M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z", "M12 9v4", "M12 17h.01"],
   trendingDown: ["M3 7l6 6 4-4 8 8", "M17 17h4v-4"],
+  trendingUp: ["M3 17l6-6 4 4 8-8", "M17 7h4v4"],
+  lock: ["M6 10V7a6 6 0 0 1 12 0v3", "M5 10h14v11H5z"],
 };
 
 function Icon({ name, size = 18, strokeWidth = 1.8, className = "" }) {
@@ -293,6 +302,7 @@ function buildFlowBars(transactions, period, primaryCurrency = "DOP") {
 
   transactions.forEach((transaction) => {
     if (!["income", "expense"].includes(transaction.type)) return;
+    if (String(transaction.source || "").toUpperCase() === "GOAL") return;
     if ((transaction.currencyCode || primaryCurrency) !== primaryCurrency) return;
     const dateText = String(transaction.transactionDate || "");
     if (dateText < start || dateText > end) return;
@@ -745,6 +755,7 @@ function SavingsApp() {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [onboardingSaving, setOnboardingSaving] = useState(false);
   const [profileWizardOpen, setProfileWizardOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
   const [auth, setAuth] = useState({ checking: true, registrationEnabled: true, user: null });
 
@@ -877,6 +888,7 @@ function SavingsApp() {
       if (modal.kind === "category-update" || modal.kind === "category-delete") payload.categoryId = modal.referenceId;
       if (["credit-card-update", "credit-card-delete", "credit-card-payment", "credit-card-consumption"].includes(modal.kind)) payload.cardId = modal.referenceId;
       if (["debt-update", "debt-delete", "debt-payment"].includes(modal.kind)) payload.debtId = modal.referenceId;
+      if (["goal-update", "goal-delete"].includes(modal.kind)) payload.goalId = modal.referenceId;
     }
 
     try {
@@ -1069,15 +1081,15 @@ function SavingsApp() {
         {activeView === "categorias" && <CategoriesView data={data} openModal={openModal} />}
         {activeView === "credito" && <CreditView data={data} openModal={openModal} />}
         {activeView === "metas" && <GoalsView data={data} openModal={openModal} />}
+        {activeView === "analisis" && <InsightsView data={data} goTo={setActiveView} />}
         {activeView === "cuentas" && <AccountsView data={data} openModal={openModal} showBalance={showBalance} />}
       </main>
 
       <nav className="mobile-nav" aria-label="Navegación móvil">
-        {mobileNavItems.map((item) => <button key={item.id} className={activeView === item.id ? "active" : ""} onClick={() => setActiveView(item.id)}>
-          <span><Icon name={item.icon} size={19} /></span>
-          <small>{item.mobileLabel || item.label}</small>
-        </button>)}
+        {mobileNavItems.map((item) => <button key={item.id} className={activeView === item.id ? "active" : ""} onClick={() => { setActiveView(item.id); setMobileMenuOpen(false); }}><span><Icon name={item.icon} size={22} /></span><small>{item.mobileLabel || item.label}</small></button>)}
+        <button className={mobileMoreItems.some((item) => item.id === activeView) || mobileMenuOpen ? "active" : ""} onClick={() => setMobileMenuOpen((value) => !value)}><span><Icon name="circleMore" size={22} /></span><small>Más</small></button>
       </nav>
+      {mobileMenuOpen && <div className="mobile-more-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setMobileMenuOpen(false); }}><section className="mobile-more-sheet"><div className="mobile-sheet-handle"/><div className="mobile-sheet-head"><div><p className="eyebrow">Más de Clara</p><h2>Tu centro financiero</h2></div><button className="icon-button" onClick={() => setMobileMenuOpen(false)}><Icon name="close" size={18}/></button></div><div className="mobile-more-grid">{mobileMoreItems.map((item)=><button key={item.id} className={activeView===item.id?"active":""} onClick={()=>{setActiveView(item.id);setMobileMenuOpen(false);}}><span><Icon name={item.icon} size={22}/></span><div><strong>{item.label}</strong><small>{item.id==="analisis"?"Insights y predicciones":item.id==="metas"?"Metas y patrimonio":item.id==="credito"?"Tarjetas y obligaciones":item.id==="cuentas"?"Saldos e instituciones":"Tu organización"}</small></div><Icon name="chevronRight" size={16}/></button>)}</div><button className="mobile-settings-link" onClick={()=>{setMobileMenuOpen(false);setSettingsOpen(true);}}><Icon name="settings" size={20}/><span><strong>Perfil y preferencias</strong><small>Datos personales, moneda y seguridad</small></span><Icon name="chevronRight" size={16}/></button></section></div>}
 
       {modal && <OperationModal
         modal={modal}
@@ -1109,7 +1121,8 @@ function viewTitle(view) {
     calendario: "Anticípate a lo que viene.",
     categorias: "Ordena tu dinero a tu manera.",
     credito: "Entiende lo que debes y lo que tienes disponible.",
-    metas: "Ahorra con un destino.",
+    metas: "Convierte tus planes en avances concretos.",
+    analisis: "Clara interpreta tus números contigo.",
     cuentas: "Todo tu dinero, en orden.",
   };
   return titles[view];
@@ -1125,22 +1138,20 @@ function Dashboard({ data, showBalance, setShowBalance, openModal, goTo, user })
   const profile = user?.profile || {};
   const planningLabel = profile.planningPeriod === "biweekly" ? "quincena" : "mes";
   const expectedMargin = Math.max(Number(profile.incomeAmount || 0) - Number(profile.fixedExpenses || 0), 0);
-  const pulse = financialPulse(profile);
+  const analytics = data.analytics || EMPTY_DATA.analytics;
+  const emergency = data.emergencyFund || EMPTY_DATA.emergencyFund;
   const nextPayday = nextPaydayLabel(profile);
-  const emergencyCoverage = pulse.emergencyTarget > 0
-    ? Math.min(100, Math.round((Number(profile.emergencySavings || 0) / pulse.emergencyTarget) * 100))
-    : 0;
 
   return <div className="dashboard-grid">
     <div className="dashboard-primary">
       <section className="balance-hero premium-hero">
         <div className="hero-topline">
-          <span>{data.summary.hasMixedCurrencies ? `Patrimonio en ${currencyCode}` : "Patrimonio total"}</span>
+          <span>Patrimonio neto estimado</span>
           <button className="icon-button" onClick={() => setShowBalance(!showBalance)} aria-label={showBalance ? "Ocultar saldos" : "Mostrar saldos"}>
             <Icon name={showBalance ? "eye" : "eyeOff"} size={16} />
           </button>
         </div>
-        <strong className="hero-balance">{showBalance ? money(data.summary.totalBalance) : `${currencySymbol} ••••••`}</strong>
+        <strong className="hero-balance">{showBalance ? money(data.summary.netWorth ?? data.summary.totalBalance) : `${currencySymbol} ••••••`}</strong>
         <div className="hero-meta">
           <span><i className="positive-dot" /> Seguro para gastar <strong>{showBalance ? money(data.summary.safeToSpend ?? data.summary.budgetAvailable) : "••••"}</strong></span>
           <span className="hero-change">{data.summary.budgetAlertCount ? `${data.summary.budgetAlertCount} alerta${data.summary.budgetAlertCount === 1 ? "" : "s"}` : `${savingsRate}% libre`}</span>
@@ -1205,20 +1216,7 @@ function Dashboard({ data, showBalance, setShowBalance, openModal, goTo, user })
         </div>
       </section>
 
-      <section className="clara-pulse-card">
-        <div className="pulse-card-head">
-          <span className="pulse-icon"><Icon name="pulse" size={18} /></span>
-          <span className="pulse-score"><strong>{pulse.score}</strong><small>/100</small></span>
-        </div>
-        <div className="pulse-title-row"><div><p className="eyebrow light">Índice Clara</p><h2>{pulse.label}</h2></div><span className="pulse-badge">Personal</span></div>
-        <div className="pulse-track" aria-label={`Índice Clara ${pulse.score} de 100`}><i style={{ width: `${pulse.score}%` }} /></div>
-        <p className="pulse-recommendation">{pulse.recommendation}</p>
-        <div className="pulse-metrics">
-          <span><Icon name="clock" size={15} /><small>Próximo cobro</small><strong>{nextPayday}</strong></span>
-          <span><Icon name="shield" size={15} /><small>Fondo de emergencia</small><strong>{pulse.emergencyTarget ? `${emergencyCoverage}%` : "Configurar"}</strong></span>
-        </div>
-        <small className="pulse-disclaimer">Indicador interno de organización financiera. No es un score bancario ni crediticio.</small>
-      </section>
+      <section className="clara-pulse-card dynamic-insight-card"><div className="pulse-card-head"><span className="pulse-icon"><Icon name="pulse" size={18}/></span><span className="pulse-score"><strong>{analytics.claraIndex || 0}</strong><small>/100</small></span></div><div className="pulse-title-row"><div><p className="eyebrow light">Índice Clara</p><h2>{analytics.claraIndexLabel || "Construyendo tu panorama"}</h2></div><span className="pulse-badge">Dinámico</span></div><div className="pulse-track"><i style={{width:`${analytics.claraIndex||0}%`}}/></div><p className="pulse-recommendation">{analytics.primaryRecommendation?.message || "Sigue registrando tus movimientos para que Clara pueda interpretar mejor tus hábitos."}</p><div className="pulse-metrics"><span><Icon name="clock" size={15}/><small>Próximo cobro</small><strong>{nextPayday}</strong></span><span><Icon name="shield" size={15}/><small>Fondo de emergencia</small><strong>{emergency.coverageMonths || 0} meses</strong></span></div><button className="text-button insight-link" onClick={()=>goTo("analisis")}>Ver análisis completo <Icon name="chevronRight" size={14}/></button><small className="pulse-disclaimer">Indicador interno de organización financiera. No es un score bancario ni crediticio.</small></section>
 
       <section className="section-card accounts-summary elevated-card">
         <div className="section-heading"><div><p className="eyebrow">Saldos</p><h2>Mis cuentas</h2></div><button className="mini-add" onClick={() => openModal("account")} aria-label="Añadir cuenta"><Icon name="plus" size={16} /></button></div>
@@ -1602,31 +1600,13 @@ function CreditView({ data, openModal }) {
 }
 
 function GoalsView({ data, openModal }) {
-  const { money } = useMoney();
-  const totalSaved = data.goals.reduce((total, goal) => total + goal.currentAmount, 0);
-  return <section className="page-card">
-    <div className="page-intro">
-      <div><p className="eyebrow">Ahorro con intención</p><h2>Tus metas</h2><p>Convierte una cantidad grande en pequeños avances que sí puedes ver.</p></div>
-      <button className="primary-action" onClick={() => openModal("goal")}><Icon name="plus" size={15} /> Nueva meta</button>
-    </div>
-    <div className="goal-summary-strip">
-      <span><small>Total reservado</small><strong>{money(totalSaved)}</strong></span>
-      <span><small>Metas activas</small><strong>{data.goals.length}</strong></span>
-      <span><small>Próxima fecha</small><strong>{data.goals[0] ? longDate(data.goals[0].dueDate) : "Sin fecha"}</strong></span>
-    </div>
-    <div className="goals-grid">
-      {data.goals.map((goal, index) => <article className={`goal-card ${goal.color}`} key={goal.id}>
-        <div className="goal-card-top"><span className="goal-badge">{index === 0 ? "Prioridad" : "En progreso"}</span><span className="goal-round-icon"><Icon name={index % 2 ? "sparkles" : "target"} size={17} /></span></div>
-        <p>Meta para {longDate(goal.dueDate)}</p>
-        <h3>{goal.name}</h3>
-        <div className="goal-big-number"><strong>{money(goal.currentAmount)}</strong><span> / {money(goal.targetAmount)}</span></div>
-        <Progress value={percentage(goal.currentAmount, goal.targetAmount)} color={goal.color} />
-        <div className="goal-card-footer"><span>{percentage(goal.currentAmount, goal.targetAmount)}% completado</span><button onClick={() => openModal("goal-contribution", goal.id)}>Aportar <Icon name="chevronRight" size={13} /></button></div>
-      </article>)}
-      <button className="new-goal-card" onClick={() => openModal("goal")}><span><Icon name="plus" size={22} /></span><strong>{data.goals.length ? "Crear otra meta" : "Crear tu primera meta"}</strong><small>Define cuánto quieres y para cuándo.</small></button>
-    </div>
-  </section>;
+  const { moneyFor, currencyCode } = useMoney(); const goals=data.goals||[]; const emergency=data.emergencyFund||EMPTY_DATA.emergencyFund; const wealth=data.wealth||EMPTY_DATA.wealth; const active=goals.filter((g)=>g.status!=="completed"); const total=goals.filter((g)=>g.currencyCode===currencyCode).reduce((sum,g)=>sum+g.currentAmount,0);
+  return <div className="goals-page smart-goals-page"><section className="goal-hero-card"><div><p className="eyebrow light">Metas con rumbo</p><h2>Lo que quieres lograr, convertido en un plan.</h2><p>Clara calcula cuánto necesitas separar por mes o quincena y te dice si vas al ritmo correcto.</p></div><button className="primary-action light-action" onClick={()=>openModal("goal")}><Icon name="plus" size={16}/> Nueva meta</button><div className="goal-hero-metrics"><span><small>Reservado en {currencyCode}</small><strong>{moneyFor(total,currencyCode)}</strong></span><span><small>Metas activas</small><strong>{active.length}</strong></span><span><small>Patrimonio neto</small><strong>{moneyFor(wealth.netWorth||0,currencyCode)}</strong></span></div></section>
+  <div className="goal-command-grid"><section className="section-card emergency-card"><div className="section-heading"><div><p className="eyebrow">Fondo de emergencia</p><h2>Tu colchón financiero</h2></div><span className="goal-round-icon"><Icon name="shield" size={19}/></span></div><div className="emergency-number"><strong>{moneyFor(emergency.currentAmount||0,currencyCode)}</strong><span>de {moneyFor(emergency.targetAmount||0,currencyCode)}</span></div><Progress value={emergency.percentage||0} color="mint"/><div className="emergency-stats"><span><small>Cobertura actual</small><strong>{emergency.coverageMonths||0} meses</strong></span><span><small>Referencia</small><strong>{emergency.recommendedMonths||3} meses</strong></span></div>{emergency.goalId?<button className="secondary-action full" onClick={()=>openModal("goal-contribution",emergency.goalId)}>Aportar al fondo</button>:<button className="secondary-action full" onClick={()=>openModal("goal")}>Crear fondo de emergencia</button>}</section><section className="section-card wealth-mini-card"><div className="section-heading"><div><p className="eyebrow">Patrimonio</p><h2>Evolución reciente</h2></div><Icon name="trendingUp" size={20}/></div><MiniWealthChart points={wealth.accountEvolution||[]}/><div className="wealth-breakdown"><span><small>Dinero líquido</small><strong>{moneyFor(wealth.liquidBalance||0,currencyCode)}</strong></span><span><small>Reservado</small><strong>{moneyFor(wealth.goalReserves||0,currencyCode)}</strong></span><span><small>Obligaciones</small><strong>-{moneyFor(wealth.liabilities||0,currencyCode)}</strong></span></div></section></div>
+  <section className="section-card goals-workspace"><div className="page-intro compact-intro"><div><p className="eyebrow">Tus objetivos</p><h2>Planes activos</h2><p>Prioriza, ajusta y aporta sin perder la trazabilidad.</p></div><button className="primary-action" onClick={()=>openModal("goal")}><Icon name="plus" size={15}/> Nueva meta</button></div><div className="goals-grid smart-goals-grid">{goals.map((goal)=><article className={`goal-card smart-goal-card ${goal.color}`} key={goal.id}><div className="goal-card-top"><div className="goal-badge-stack"><span className={`priority-badge p${goal.priority||2}`}>{goal.priorityLabel||"Media"}</span><span className="goal-type-badge">{goal.goalTypeLabel||"Meta"}</span></div><div className="goal-card-actions"><button onClick={()=>openModal("goal-update",goal.id)}><Icon name="edit" size={15}/></button><button className="danger-icon" onClick={()=>openModal("goal-delete",goal.id)}><Icon name="trash" size={15}/></button></div></div><h3>{goal.name}</h3><p>{goal.note||`Fecha objetivo: ${longDate(goal.dueDate)}`}</p><div className="goal-big-number"><strong>{moneyFor(goal.currentAmount,goal.currencyCode)}</strong><span> / {moneyFor(goal.targetAmount,goal.currencyCode)}</span></div><Progress value={goal.progress??percentage(goal.currentAmount,goal.targetAmount)} color={goal.color}/><div className="goal-plan-grid"><span><small>{data.period?.mode==="biweekly"?"Por quincena":"Por mes"}</small><strong>{moneyFor(goal.requiredPerPeriod||0,goal.currencyCode)}</strong></span><span><small>Períodos restantes</small><strong>{goal.periodsRemaining??0}</strong></span></div><div className={`goal-projection ${goal.projectionStatus||"new"}`}><Icon name={goal.projectionStatus==="on-track"||goal.projectionStatus==="completed"?"checkCircle":"clock"} size={15}/><span>{goal.projectionStatus==="completed"?"Meta completada":goal.projectionStatus==="on-track"?"Vas al ritmo proyectado":goal.projectionStatus==="behind"?"Necesitas aumentar el ritmo":goal.projectionStatus==="overdue"?"La fecha objetivo ya pasó":"Comienza con tu primer aporte"}</span></div><div className="goal-card-footer"><span>{goal.sharedReady?<><Icon name="users" size={13}/> Preparada para compartir</>:`${goal.progress??0}% completado`}</span><button onClick={()=>openModal("goal-contribution",goal.id)}>Aportar <Icon name="chevronRight" size={13}/></button></div></article>)}<button className="new-goal-card" onClick={()=>openModal("goal")}><span><Icon name="plus" size={22}/></span><strong>{goals.length?"Crear otra meta":"Crear tu primera meta"}</strong><small>Clara calculará el esfuerzo necesario para llegar a tiempo.</small></button></div></section></div>;
 }
+function MiniWealthChart({points=[]}) { const values=points.map((p)=>Number(p.balance??p.netWorth??0)); const max=Math.max(...values,1),min=Math.min(...values,0),range=Math.max(max-min,1); return <div className="mini-wealth-chart">{points.length?points.map((point)=><span key={point.key||point.date} className="wealth-bar"><i style={{height:`${22+((Number(point.balance??point.netWorth??0)-min)/range)*68}%`}}/><small>{String(point.key||point.date||"").slice(5,7)}</small></span>):<div className="empty-inline"><Icon name="chart" size={18}/> El historial crecerá con el uso de Clara.</div>}</div>; }
+function InsightsView({data,goTo}) { const {money,currencyCode}=useMoney(); const a=data.analytics||EMPTY_DATA.analytics,w=data.wealth||EMPTY_DATA.wealth,e=data.emergencyFund||EMPTY_DATA.emergencyFund; const delta=(v)=>`${v>0?"+":""}${v||0}%`; return <div className="analytics-page"><section className="analytics-hero"><div><p className="eyebrow light">Clara Insights</p><h2>Una lectura clara de cómo te estás moviendo.</h2><p>Comparaciones y proyecciones construidas solo con la información registrada en tu perfil.</p></div><div className="analytics-score-ring"><strong>{a.claraIndex||0}</strong><small>/100</small><span>{a.claraIndexLabel||"Construyendo índice"}</span></div></section><section className="analytics-kpis"><article><span><Icon name="trendingUp" size={18}/></span><small>Capacidad de ahorro</small><strong>{a.savingsCapacityRate||0}%</strong><p>{money(a.savingsCapacityAmount||0)} este mes</p></article><article><span><Icon name="creditCard" size={18}/></span><small>Deuda / ingreso</small><strong>{a.debtToIncomeRate||0}%</strong><p>Pagos mensuales frente al ingreso</p></article><article><span><Icon name="lock" size={18}/></span><small>Gastos fijos / ingreso</small><strong>{a.fixedToIncomeRate||0}%</strong><p>Parte del ingreso comprometida</p></article><article><span><Icon name="shield" size={18}/></span><small>Fondo de emergencia</small><strong>{e.coverageMonths||0} meses</strong><p>{e.percentage||0}% de tu referencia</p></article></section><div className="analytics-main-grid"><section className="section-card"><div className="section-heading"><div><p className="eyebrow">Comparación</p><h2>Este período vs. el anterior</h2></div></div><div className="comparison-grid"><div><small>Gastos del período</small><strong>{money(a.currentPeriod?.expenses||0)}</strong><span className={(a.periodExpenseDelta||0)>0?"delta bad":"delta good"}>{delta(a.periodExpenseDelta)}</span></div><div><small>Gastos del mes</small><strong>{money(a.currentMonth?.expenses||0)}</strong><span className={(a.monthExpenseDelta||0)>0?"delta bad":"delta good"}>{delta(a.monthExpenseDelta)}</span></div><div><small>Ingresos del mes</small><strong>{money(a.currentMonth?.income||0)}</strong><span className={(a.monthIncomeDelta||0)>=0?"delta good":"delta bad"}>{delta(a.monthIncomeDelta)}</span></div></div></section><section className="section-card projection-card"><div className="section-heading"><div><p className="eyebrow">Proyección</p><h2>Así podría cerrar tu mes</h2></div><Icon name="chart" size={20}/></div><strong className="projection-number">{money(a.projectedEndBalance||0)}</strong><p>Saldo estimado si mantienes el ritmo registrado y cumples los compromisos conocidos.</p><div className="projection-line"><span>Gasto mensual proyectado</span><strong>{money(a.projectedMonthExpenses||0)}</strong></div></section></div><div className="analytics-main-grid"><section className="section-card"><div className="section-heading"><div><p className="eyebrow">Tendencias</p><h2>Dónde cambió tu gasto</h2></div></div><div className="trend-list">{(a.categoryTrends||[]).length?a.categoryTrends.map((item)=><div key={item.categoryId}><span className={`category-icon-tile ${item.color}`}><CategoryIcon category={{id:item.categoryId}} size={16}/></span><span><strong>{item.name}</strong><small>Anterior {money(item.previous)}</small></span><b>{money(item.current)}</b><i className={item.delta>0?"trend-up":"trend-down"}>{delta(item.delta)}</i></div>):<div className="empty-inline"><Icon name="chart" size={18}/> Registra más gastos para comparar categorías.</div>}</div></section><section className="section-card"><div className="section-heading"><div><p className="eyebrow">Detección</p><h2>Gastos fuera de tu patrón</h2></div></div><div className="unusual-list">{(a.unusualExpenses||[]).length?a.unusualExpenses.map((item)=><div key={item.id}><span><Icon name="alertTriangle" size={17}/></span><div><strong>{item.description}</strong><small>{item.categoryName} · {prettyDate(item.date)} · {item.multiplier}x tu promedio</small></div><b>{money(item.amount)}</b></div>):<div className="empty-inline"><Icon name="checkCircle" size={18}/> No detectamos gastos anormales con los datos disponibles.</div>}</div></section></div><section className="section-card recommendations-card"><div className="section-heading"><div><p className="eyebrow">Recomendaciones</p><h2>Qué merece tu atención ahora</h2></div></div><div className="recommendation-grid">{(a.recommendations||[]).map((item,index)=><button key={`${item.type}-${index}`} onClick={()=>goTo(item.actionView||"inicio")}><span><Icon name={item.type==="positive"?"checkCircle":item.type==="debt"?"creditCard":item.type==="emergency"?"shield":"sparkles"} size={19}/></span><div><strong>{item.title}</strong><p>{item.message}</p></div><Icon name="chevronRight" size={16}/></button>)}</div></section><section className="section-card wealth-history-card"><div className="section-heading"><div><p className="eyebrow">Patrimonio</p><h2>Tu historia financiera</h2></div><strong>{money(w.netWorth||0)}</strong></div><MiniWealthChart points={(w.snapshots||[]).length>1?w.snapshots:w.accountEvolution||[]}/><div className="wealth-breakdown analytics"><span><small>Líquido</small><strong>{money(w.liquidBalance||0)}</strong></span><span><small>Metas</small><strong>{money(w.goalReserves||0)}</strong></span><span><small>Obligaciones</small><strong>-{money(w.liabilities||0)}</strong></span><span><small>Neto</small><strong>{money(w.netWorth||0)}</strong></span></div></section></div>; }
 
 function AccountsView({ data, openModal, showBalance }) {
   const { money, moneyFor, currencySymbol, currencyCode } = useMoney();
@@ -1710,6 +1690,7 @@ function sourceLabel(source) {
     EMAIL: "Clara Mail",
     IMPORT: "Importado",
     BANK_API: "Bank Connect",
+    GOAL: "Reserva de meta",
   }[String(source || "MANUAL").toUpperCase()] || "Manual";
 }
 
@@ -2004,6 +1985,8 @@ function LiabilityPaymentFields({ item, type, data }) {
   </>;
 }
 
+function GoalFields({goal,userCurrencyCode}) { const code=goal?.currencyCode||userCurrencyCode||"DOP"; return <><label><span>Nombre de la meta</span><input name="name" required autoFocus defaultValue={goal?.name||""} placeholder="Ej. Fondo de emergencia"/></label><div className="form-grid two"><label><span>Tipo</span><select name="goalType" defaultValue={goal?.goalType||"general"}><option value="general">Meta general</option><option value="emergency">Fondo de emergencia</option><option value="purchase">Compra importante</option><option value="travel">Viaje</option><option value="education">Educación</option><option value="debt">Salir de deuda</option><option value="investment">Inversión</option><option value="other">Otra</option></select></label><label><span>Prioridad</span><select name="priority" defaultValue={String(goal?.priority||2)}><option value="1">Alta</option><option value="2">Media</option><option value="3">Baja</option></select></label></div><div className="form-grid two"><label><span>Moneda</span><select name="currencyCode" defaultValue={code}>{currencyOptions.map((c)=><option key={c.code} value={c.code}>{c.label} ({c.symbol})</option>)}</select></label><label><span>Monto objetivo</span><input type="number" name="targetAmount" min={goal?Math.max((goal.currentAmount||0)/100,.01):.01} step="0.01" defaultValue={goal?(goal.targetAmount/100).toFixed(2):""} required/></label></div><label><span>Fecha objetivo</span><input type="date" name="dueDate" min={goal?.dueDate||todayIso()} defaultValue={goal?.dueDate||""} required/></label><label><span>Nota <small>opcional</small></span><textarea name="note" rows="3" maxLength="500" defaultValue={goal?.note||""}/></label><input type="hidden" name="sharedReady" value="false"/><label className="check-option standalone"><input type="checkbox" name="sharedReady" value="true" defaultChecked={Boolean(goal?.sharedReady)}/><span><strong>Prepararla para una meta compartida</strong><small>No la comparte todavía. La deja lista para el futuro modo pareja/familia.</small></span></label></>; }
+
 function OperationModal({ modal, data, saving, error, user, onClose, onSubmit }) {
   const { money, moneyFor, currencySymbol } = useMoney();
   const category = data.categories.find((item) => item.id === modal.referenceId);
@@ -2025,6 +2008,8 @@ function OperationModal({ modal, data, saving, error, user, onClose, onSubmit })
     "recurring-paid": { eyebrow: "Confirmar pago", title: recurring?.name ?? "Marcar como pagado", submit: "Confirmar pago" },
     "recurring-delete": { eyebrow: "Eliminar compromiso", title: recurring?.name ?? "Eliminar pago recurrente", submit: "Eliminar compromiso", danger: true },
     goal: { eyebrow: "Ahorro con destino", title: "Crear nueva meta", submit: "Crear meta" },
+    "goal-update": { eyebrow: "Editar meta", title: goal?.name ?? "Editar meta", submit: "Guardar cambios" },
+    "goal-delete": { eyebrow: "Archivar meta", title: goal?.name ?? "Archivar meta", submit: "Archivar meta", danger: true },
     "goal-contribution": { eyebrow: "Avanza un poco más", title: `Aportar a ${goal?.name ?? "la meta"}`, submit: "Guardar aporte" },
     account: { eyebrow: "Nueva cuenta", title: "Añadir cuenta", submit: "Crear cuenta" },
     "account-update": { eyebrow: "Editar cuenta", title: account?.name ?? "Editar cuenta", submit: "Guardar cambios" },
@@ -2102,20 +2087,9 @@ function OperationModal({ modal, data, saving, error, user, onClose, onSubmit })
           <div><strong>¿Eliminar {recurring.name}?</strong><p>Dejará de aparecer en el calendario y en tus próximos compromisos. Los gastos que ya hayas registrado se conservarán.</p></div>
         </div>}
 
-        {modal.kind === "goal" && <>
-          <label><span>Nombre de la meta</span><input name="name" required autoFocus placeholder="Ej. Fondo de emergencia" /></label>
-          <label><span>¿Cuánto necesitas?</span><div className="money-field"><span>{currencySymbol}</span><input type="number" name="targetAmount" min="0.01" step="0.01" placeholder="0.00" required /></div></label>
-          <label><span>¿Para cuándo?</span><input type="date" name="dueDate" min={todayIso()} required /></label>
-        </>}
-
-        {modal.kind === "goal-contribution" && <>
-          <div className="modal-context goal-context"><span className="goal-round-icon"><Icon name="target" size={18} /></span><span><small>Faltan</small><strong>{money(Math.max((goal?.targetAmount ?? 0) - (goal?.currentAmount ?? 0), 0))}</strong></span></div>
-          <MoneyInput label="Monto del aporte" />
-          <label><span>Tomar dinero de</span><select name="accountId" required defaultValue={data.accounts.find((item) => item.currencyCode === user?.currencyCode)?.id || ""}>
-            {data.accounts.filter((item) => item.currencyCode === user?.currencyCode).map((item) => <option key={item.id} value={item.id}>{item.name} — {moneyFor(item.balance, item.currencyCode)}</option>)}
-          </select></label>
-          <p className="form-note"><Icon name="info" size={14} /> Las metas actuales trabajan con tu moneda principal. El soporte de metas multimoneda se desarrollará en Clara 3.4.</p>
-        </>}
+        {(modal.kind === "goal" || modal.kind === "goal-update") && <GoalFields goal={modal.kind === "goal-update" ? goal : null} userCurrencyCode={user?.currencyCode} />}
+        {modal.kind === "goal-delete" && goal && <div className="danger-confirmation"><span><Icon name="trash" size={20}/></span><div><strong>¿Archivar {goal.name}?</strong><p>Clara conservará sus aportes y el historial. La meta dejará de aparecer entre tus planes activos.</p></div></div>}
+        {modal.kind === "goal-contribution" && <><div className="modal-context goal-context"><span className="goal-round-icon"><Icon name="target" size={18}/></span><span><small>Faltan</small><strong>{moneyFor(Math.max((goal?.targetAmount??0)-(goal?.currentAmount??0),0),goal?.currencyCode)}</strong></span></div><label><span>Monto del aporte</span><input type="number" name="amount" min="0.01" step="0.01" required autoFocus placeholder="0.00"/></label><label><span>Tomar dinero de</span><select name="accountId" required defaultValue={data.accounts.find((item)=>item.currencyCode===goal?.currencyCode)?.id||""}>{data.accounts.filter((item)=>item.currencyCode===goal?.currencyCode).map((item)=><option key={item.id} value={item.id}>{item.name} — {moneyFor(item.balance,item.currencyCode)}</option>)}</select></label><label><span>Fecha del aporte</span><input type="date" name="contributionDate" defaultValue={todayIso()} required/></label><label><span>Nota <small>opcional</small></span><input name="note" maxLength="500" placeholder="Ej. Aporte de esta quincena"/></label><p className="form-note"><Icon name="info" size={14}/> Esta meta usa {goal?.currencyCode||user?.currencyCode}. El aporte se reserva sin contarlo como gasto de consumo.</p></>}
 
         {modal.kind === "account" && <AccountFields userCurrencyCode={user?.currencyCode} />}
 
