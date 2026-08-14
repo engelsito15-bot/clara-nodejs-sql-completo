@@ -148,6 +148,94 @@ CREATE TABLE IF NOT EXISTS recurring_payments (
   CONSTRAINT fk_recurring_account FOREIGN KEY (account_id) REFERENCES accounts(id)
 );
 
+
+CREATE TABLE IF NOT EXISTS user_hidden_categories (
+  user_id BIGINT NOT NULL,
+  category_id BIGINT NOT NULL,
+  hidden_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, category_id),
+  CONSTRAINT fk_hidden_categories_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_hidden_categories_category FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS credit_cards (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  name VARCHAR(160) NOT NULL,
+  institution_name VARCHAR(160) NOT NULL DEFAULT '',
+  currency_code VARCHAR(10) NOT NULL DEFAULT 'DOP',
+  credit_limit BIGINT NOT NULL DEFAULT 0,
+  current_balance BIGINT NOT NULL DEFAULT 0,
+  statement_day INT NOT NULL DEFAULT 1,
+  due_day INT NOT NULL DEFAULT 20,
+  minimum_payment BIGINT NOT NULL DEFAULT 0,
+  annual_interest_rate DECIMAL(7,3) NOT NULL DEFAULT 0,
+  note VARCHAR(500) NOT NULL DEFAULT '',
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT chk_credit_cards_limit CHECK (credit_limit >= 0),
+  CONSTRAINT chk_credit_cards_balance CHECK (current_balance >= 0),
+  CONSTRAINT fk_credit_cards_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS debts (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  name VARCHAR(180) NOT NULL,
+  lender VARCHAR(180) NOT NULL DEFAULT '',
+  debt_type VARCHAR(30) NOT NULL DEFAULT 'personal',
+  currency_code VARCHAR(10) NOT NULL DEFAULT 'DOP',
+  original_amount BIGINT NOT NULL,
+  current_balance BIGINT NOT NULL,
+  regular_payment BIGINT NOT NULL DEFAULT 0,
+  payment_frequency VARCHAR(20) NOT NULL DEFAULT 'monthly',
+  annual_interest_rate DECIMAL(7,3) NOT NULL DEFAULT 0,
+  next_due_date DATE NULL,
+  end_date DATE NULL,
+  note VARCHAR(500) NOT NULL DEFAULT '',
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT chk_debts_original CHECK (original_amount > 0),
+  CONSTRAINT chk_debts_balance CHECK (current_balance >= 0),
+  CONSTRAINT fk_debts_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+
+CREATE TABLE IF NOT EXISTS credit_card_consumptions (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  card_id BIGINT NOT NULL,
+  description VARCHAR(255) NOT NULL,
+  amount BIGINT NOT NULL,
+  category_id BIGINT NOT NULL,
+  purchase_date DATE NOT NULL,
+  installments INT NOT NULL DEFAULT 1,
+  note VARCHAR(500) NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT chk_card_consumptions_amount CHECK (amount > 0),
+  CONSTRAINT fk_card_consumptions_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_card_consumptions_card FOREIGN KEY (card_id) REFERENCES credit_cards(id),
+  CONSTRAINT fk_card_consumptions_category FOREIGN KEY (category_id) REFERENCES categories(id)
+);
+
+CREATE TABLE IF NOT EXISTS liability_payments (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  liability_type VARCHAR(20) NOT NULL,
+  liability_id BIGINT NOT NULL,
+  source_account_id BIGINT NOT NULL,
+  amount BIGINT NOT NULL,
+  payment_date DATE NOT NULL,
+  note VARCHAR(500) NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT chk_liability_payment_type CHECK (liability_type IN ('card','debt')),
+  CONSTRAINT chk_liability_payment_amount CHECK (amount > 0),
+  CONSTRAINT fk_liability_payments_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_liability_payments_account FOREIGN KEY (source_account_id) REFERENCES accounts(id)
+);
+
 CREATE TABLE IF NOT EXISTS transactions (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   user_id BIGINT NOT NULL,
@@ -202,3 +290,10 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expiration ON sessions(expires_at);
 
 CREATE INDEX IF NOT EXISTS idx_recurring_user_due ON recurring_payments(user_id, is_active, next_due_date);
+
+CREATE INDEX IF NOT EXISTS idx_hidden_categories_user ON user_hidden_categories(user_id);
+CREATE INDEX IF NOT EXISTS idx_credit_cards_user_active ON credit_cards(user_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_debts_user_active_due ON debts(user_id, is_active, next_due_date);
+CREATE INDEX IF NOT EXISTS idx_liability_payments_user ON liability_payments(user_id, liability_type, liability_id);
+
+CREATE INDEX IF NOT EXISTS idx_card_consumptions_user_date ON credit_card_consumptions(user_id, purchase_date);

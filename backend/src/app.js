@@ -35,6 +35,16 @@ import {
   createCategory as engineCreateCategory,
   updateCategory as engineUpdateCategory,
   deleteCategory as engineDeleteCategory,
+  createCreditCard as engineCreateCreditCard,
+  createCreditCardConsumption as engineCreateCreditCardConsumption,
+  updateCreditCard as engineUpdateCreditCard,
+  deleteCreditCard as engineDeleteCreditCard,
+  payCreditCard as enginePayCreditCard,
+  createDebt as engineCreateDebt,
+  updateDebt as engineUpdateDebt,
+  deleteDebt as engineDeleteDebt,
+  payDebt as enginePayDebt,
+  restoreSystemCategories as engineRestoreSystemCategories,
 } from "./finance-engine.js";
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
@@ -533,10 +543,40 @@ export function createApp({ databasePath } = {}) {
         case "category-delete":
           await engineDeleteCategory(database, userId, payload);
           break;
+        case "category-restore":
+          await engineRestoreSystemCategories(database, userId);
+          break;
+        case "credit-card":
+          await engineCreateCreditCard(database, userId, payload);
+          break;
+        case "credit-card-consumption":
+          await engineCreateCreditCardConsumption(database, userId, payload);
+          break;
+        case "credit-card-update":
+          await engineUpdateCreditCard(database, userId, payload);
+          break;
+        case "credit-card-delete":
+          await engineDeleteCreditCard(database, userId, payload);
+          break;
+        case "credit-card-payment":
+          await enginePayCreditCard(database, userId, payload);
+          break;
+        case "debt":
+          await engineCreateDebt(database, userId, payload);
+          break;
+        case "debt-update":
+          await engineUpdateDebt(database, userId, payload);
+          break;
+        case "debt-delete":
+          await engineDeleteDebt(database, userId, payload);
+          break;
+        case "debt-payment":
+          await enginePayDebt(database, userId, payload);
+          break;
         default:
           throw requestError("Operación no reconocida.");
       }
-      const successStatus = ["account-update", "category-update", "recurring-update", "recurring-paid", "budget-delete", "recurring-delete"].includes(payload.action) ? 200 : 201;
+      const successStatus = ["account-update", "category-update", "recurring-update", "recurring-paid", "budget-delete", "recurring-delete", "category-delete", "category-restore", "credit-card-update", "credit-card-delete", "credit-card-payment", "debt-update", "debt-delete", "debt-payment"].includes(payload.action) ? 200 : 201;
       response.status(successStatus).json({ data: await getFinanceData(database, userId) });
     } catch (error) {
       next(error);

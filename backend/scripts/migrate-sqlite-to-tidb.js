@@ -117,7 +117,8 @@ async function migrate() {
     console.log(`Presupuestos: ${budgets.length}`);
     console.log(`Movimientos: ${transactions.length}`);
     console.log(`Metas: ${goals.length}`);
-    console.log("Las sesiones no se migran: cada usuario debe iniciar sesión nuevamente.");  } finally {
+    console.log("Las sesiones no se migran: cada usuario debe iniciar sesión nuevamente.");
+  } finally {
     source.close();
     await target.close();
   }

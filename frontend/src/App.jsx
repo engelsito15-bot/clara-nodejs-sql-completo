@@ -9,6 +9,11 @@ const EMPTY_DATA = {
   balanceHistory: [],
   goals: [],
   recurringPayments: [],
+  creditCards: [],
+  debts: [],
+  liabilityPayments: [],
+  cardConsumptions: [],
+  hiddenSystemCategoriesCount: 0,
   calendar: { monthStart: "", monthEnd: "", events: [], upcoming: [], overdue: [], windows: { days7: { count: 0, total: 0 }, days15: { count: 0, total: 0 }, days30: { count: 0, total: 0 } } },
   budgetPlan: {
     periodKey: "",
@@ -21,6 +26,7 @@ const EMPTY_DATA = {
     liquidBalance: 0,
     fixedReserve: 0,
     recurringReserve: 0,
+    liabilityReserve: 0,
     protectedCommitments: 0,
     savingsReserve: 0,
     safeToSpend: 0,
@@ -61,24 +67,33 @@ const EMPTY_DATA = {
     dailySafeToSpend: 0,
     fixedReserve: 0,
     recurringReserve: 0,
+    liabilityReserve: 0,
     protectedCommitments: 0,
     savingsReserve: 0,
     liquidBalance: 0,
     budgetAlertCount: 0,
+    creditUsedTotal: 0,
+    creditLimitTotal: 0,
+    creditAvailableTotal: 0,
+    debtBalanceTotal: 0,
+    liabilitiesTotal: 0,
+    monthlyDebtCommitment: 0,
+    netWorth: 0,
   },
 };
 
 const navItems = [
   { id: "inicio", label: "Inicio", icon: "home" },
-  { id: "movimientos", label: "Movimientos", icon: "activity" },
-  { id: "presupuesto", label: "Presupuesto", icon: "budget" },
-  { id: "calendario", label: "Calendario", icon: "calendar" },
+  { id: "movimientos", label: "Movimientos", mobileLabel: "Mov.", icon: "activity" },
+  { id: "presupuesto", label: "Presupuesto", mobileLabel: "Plan", icon: "budget" },
+  { id: "calendario", label: "Calendario", mobileLabel: "Agenda", icon: "calendar" },
   { id: "categorias", label: "Categorías", icon: "tags" },
+  { id: "credito", label: "Crédito y deudas", mobileLabel: "Crédito", icon: "creditCard" },
   { id: "metas", label: "Metas", icon: "target" },
   { id: "cuentas", label: "Cuentas", icon: "wallet" },
 ];
 
-const mobileNavItems = navItems.filter((item) => ["inicio", "movimientos", "calendario", "presupuesto", "cuentas"].includes(item.id));
+const mobileNavItems = navItems.filter((item) => ["inicio", "movimientos", "calendario", "presupuesto", "credito", "cuentas"].includes(item.id));
 
 const iconPaths = {
   home: ["M3 10.5 12 3l9 7.5", "M5 9.5V21h14V9.5", "M9 21v-7h6v7"],
@@ -131,6 +146,7 @@ const iconPaths = {
   bell: ["M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9", "M10 21h4"],
   checkCircle: ["M22 11.1V12a10 10 0 1 1-5.9-9.1", "m9 11 3 3L22 4"],
   alertTriangle: ["M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z", "M12 9v4", "M12 17h.01"],
+  trendingDown: ["M3 7l6 6 4-4 8 8", "M17 17h4v-4"],
 };
 
 function Icon({ name, size = 18, strokeWidth = 1.8, className = "" }) {
@@ -859,6 +875,8 @@ function SavingsApp() {
       if (modal.kind === "account-update" || modal.kind === "account-delete") payload.accountId = modal.referenceId;
       if (modal.kind === "category" && modal.referenceId) payload.parentId = modal.referenceId;
       if (modal.kind === "category-update" || modal.kind === "category-delete") payload.categoryId = modal.referenceId;
+      if (["credit-card-update", "credit-card-delete", "credit-card-payment", "credit-card-consumption"].includes(modal.kind)) payload.cardId = modal.referenceId;
+      if (["debt-update", "debt-delete", "debt-payment"].includes(modal.kind)) payload.debtId = modal.referenceId;
     }
 
     try {
@@ -1049,6 +1067,7 @@ function SavingsApp() {
         {activeView === "presupuesto" && <BudgetView data={data} openModal={openModal} goTo={setActiveView} />}
         {activeView === "calendario" && <CalendarView data={data} openModal={openModal} />}
         {activeView === "categorias" && <CategoriesView data={data} openModal={openModal} />}
+        {activeView === "credito" && <CreditView data={data} openModal={openModal} />}
         {activeView === "metas" && <GoalsView data={data} openModal={openModal} />}
         {activeView === "cuentas" && <AccountsView data={data} openModal={openModal} showBalance={showBalance} />}
       </main>
@@ -1056,7 +1075,7 @@ function SavingsApp() {
       <nav className="mobile-nav" aria-label="Navegación móvil">
         {mobileNavItems.map((item) => <button key={item.id} className={activeView === item.id ? "active" : ""} onClick={() => setActiveView(item.id)}>
           <span><Icon name={item.icon} size={19} /></span>
-          <small>{item.label}</small>
+          <small>{item.mobileLabel || item.label}</small>
         </button>)}
       </nav>
 
@@ -1089,6 +1108,7 @@ function viewTitle(view) {
     presupuesto: "Haz que cada monto tenga un propósito.",
     calendario: "Anticípate a lo que viene.",
     categorias: "Ordena tu dinero a tu manera.",
+    credito: "Entiende lo que debes y lo que tienes disponible.",
     metas: "Ahorra con un destino.",
     cuentas: "Todo tu dinero, en orden.",
   };
@@ -1404,7 +1424,7 @@ function CalendarView({ data, openModal }) {
 
     <div className="calendar-layout">
       <article className="calendar-board page-card">
-        <div className="calendar-board-head"><div><p className="eyebrow">Vista mensual</p><h3>{monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1)}</h3></div><span className="calendar-legend"><i className="payday" /> Cobro <i className="commitment" /> Compromiso</span></div>
+        <div className="calendar-board-head"><div><p className="eyebrow">Vista mensual</p><h3>{monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1)}</h3></div><span className="calendar-legend"><i className="payday" /> Cobro <i className="commitment" /> Recurrente <i className="liability" /> Crédito/deuda</span></div>
         <div className="calendar-weekdays">{["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map((day) => <span key={day}>{day}</span>)}</div>
         <div className="calendar-grid">
           {cells.map((date, index) => {
@@ -1413,7 +1433,7 @@ function CalendarView({ data, openModal }) {
             return <div className={`calendar-day ${date === today ? "today" : ""}`} key={date}>
               <span className="calendar-day-number">{Number(date.slice(8, 10))}</span>
               <div className="calendar-day-events">
-                {events.slice(0, 3).map((event) => <button key={event.id} className={`calendar-event ${event.type} ${event.overdue ? "overdue" : ""}`} onClick={() => event.recurringId && openModal("recurring-update", event.recurringId)} title={event.title}>
+                {events.slice(0, 3).map((event) => <button key={event.id} className={`calendar-event ${event.type} ${event.overdue ? "overdue" : ""}`} onClick={() => event.cardId ? openModal("credit-card-update", event.cardId) : event.debtId ? openModal("debt-update", event.debtId) : event.recurringId ? openModal("recurring-update", event.recurringId) : null} title={event.title}>
                   <i /> <span>{event.title}</span>
                 </button>)}
                 {events.length > 3 && <small>+{events.length - 3} más</small>}
@@ -1437,7 +1457,7 @@ function CalendarView({ data, openModal }) {
         <article className="page-card upcoming-list-card">
           <div className="section-heading"><div><p className="eyebrow">Próximos 30 días</p><h3>Compromisos</h3></div></div>
           <div className="upcoming-list">
-            {[...(calendar.overdue || []), ...(calendar.upcoming || [])].slice(0, 8).map((item, index) => <button key={`${item.id}-${item.date}-${index}`} onClick={() => openModal("recurring-update", item.id)}>
+            {[...(calendar.overdue || []), ...(calendar.upcoming || [])].slice(0, 8).map((item, index) => <button key={`${item.kind || "recurring"}-${item.id}-${item.date}-${index}`} onClick={() => item.kind === "card" ? openModal("credit-card-update", item.referenceId || item.id) : item.kind === "debt" ? openModal("debt-update", item.referenceId || item.id) : openModal("recurring-update", item.referenceId || item.id)}>
               <span className={`upcoming-date ${item.overdue ? "overdue" : ""}`}><strong>{Number(item.date.slice(8, 10))}</strong><small>{new Intl.DateTimeFormat("es-DO", { month: "short" }).format(new Date(`${item.date}T12:00:00`)).replace(".", "")}</small></span>
               <span><strong>{item.name}</strong><small>{item.categoryName || "Compromiso"} · {item.accountName || "Cuenta"}</small></span>
               <b>{moneyFor(item.amount, item.currencyCode)}</b>
@@ -1476,7 +1496,10 @@ function CategoriesView({ data, openModal }) {
   return <section className="page-card category-manager">
     <div className="page-intro">
       <div><p className="eyebrow">Organización personal</p><h2>Categorías y subcategorías</h2><p>Usa las categorías base de Clara o crea las tuyas. Cada perfil mantiene su propia organización.</p></div>
-      <button className="primary-action" onClick={() => openModal("category")}><Icon name="plus" size={15} /> Nueva categoría</button>
+      <div className="split-actions category-heading-actions">
+        {Number(data.hiddenSystemCategoriesCount || 0) > 0 && <button className="secondary-action" onClick={() => openModal("category-restore")}><Icon name="refresh" size={15} /> Restaurar base</button>}
+        <button className="primary-action" onClick={() => openModal("category")}><Icon name="plus" size={15} /> Nueva categoría</button>
+      </div>
     </div>
     <div className="category-summary-strip">
       <span><Icon name="layers" size={17} /><small>Categorías visibles</small><strong>{data.categories.length}</strong></span>
@@ -1493,7 +1516,7 @@ function CategoriesView({ data, openModal }) {
             <div className="category-actions">
               <button onClick={() => openModal("category", category.id)} title="Crear subcategoría"><Icon name="plus" size={14} /></button>
               {!category.isSystem && <button onClick={() => openModal("category-update", category.id)} title="Editar"><Icon name="edit" size={14} /></button>}
-              {!category.isSystem && <button className="danger-icon" onClick={() => openModal("category-delete", category.id)} title="Eliminar"><Icon name="trash" size={14} /></button>}
+              <button className="danger-icon" onClick={() => openModal("category-delete", category.id)} title={category.isSystem ? "Ocultar de mi perfil" : "Eliminar"}><Icon name="trash" size={14} /></button>
             </div>
           </div>
           <div className="subcategory-list">
@@ -1511,6 +1534,70 @@ function CategoriesView({ data, openModal }) {
       })}
     </div>
     {!roots.length && <div className="empty-state"><span><Icon name="tags" size={24} /></span><h3>Empieza creando una categoría</h3><p>Podrás usarla inmediatamente al registrar gastos.</p></div>}
+  </section>;
+}
+
+function CreditView({ data, openModal }) {
+  const { money, moneyFor } = useMoney();
+  const cards = data.creditCards || [];
+  const debts = data.debts || [];
+  const payments = data.liabilityPayments || [];
+  const summary = data.summary || {};
+  const primary = summary.primaryCurrency || "DOP";
+
+  return <section className="credit-page">
+    <div className="page-heading credit-heading">
+      <div><p className="eyebrow">Crédito bajo control</p><h2>Tarjetas y deudas</h2><p>Registra lo que debes, fechas importantes y pagos. Clara separa las obligaciones del dinero disponible para que no confundas crédito con efectivo.</p></div>
+      <div className="split-actions"><button className="secondary-action" onClick={() => openModal("debt")}><Icon name="plus" size={15} /> Nueva deuda</button><button className="primary-action" onClick={() => openModal("credit-card")}><Icon name="creditCard" size={15} /> Nueva tarjeta</button></div>
+    </div>
+
+    <div className="credit-kpis">
+      <article><span><Icon name="creditCard" size={18} /></span><small>Usado en tarjetas</small><strong>{money(summary.creditUsedTotal || 0)}</strong><em>de {money(summary.creditLimitTotal || 0)} de límite</em></article>
+      <article><span><Icon name="wallet" size={18} /></span><small>Crédito disponible</small><strong>{money(summary.creditAvailableTotal || 0)}</strong><em>en {cards.filter((card) => card.currencyCode === primary).length} tarjeta(s) principales</em></article>
+      <article><span><Icon name="trendingDown" size={18} /></span><small>Deudas pendientes</small><strong>{money(summary.debtBalanceTotal || 0)}</strong><em>sin contar tarjetas</em></article>
+      <article><span><Icon name="shield" size={18} /></span><small>Patrimonio neto estimado</small><strong>{money(summary.netWorth || 0)}</strong><em>activos principales menos obligaciones</em></article>
+    </div>
+
+    <section className="page-card credit-section">
+      <div className="section-heading"><div><p className="eyebrow">Tarjetas de crédito</p><h2>Uso y fechas clave</h2><p>El saldo usado es una obligación, no dinero disponible.</p></div><button className="secondary-action" onClick={() => openModal("credit-card")}><Icon name="plus" size={14} /> Añadir tarjeta</button></div>
+      <div className="credit-card-grid">
+        {cards.map((card) => <article className={`credit-card-item ${card.utilization >= 80 ? "high" : card.utilization >= 50 ? "medium" : ""}`} key={card.id}>
+          <div className="credit-card-head"><span className="credit-card-icon"><Icon name="creditCard" size={19} /></span><span><strong>{card.name}</strong><small>{card.institutionName || "Tarjeta de crédito"} · {card.currencyCode}</small></span><div className="liability-actions"><button onClick={() => openModal("credit-card-update", card.id)} title="Editar"><Icon name="edit" size={14} /></button><button className="danger-icon" onClick={() => openModal("credit-card-delete", card.id)} title="Eliminar"><Icon name="trash" size={14} /></button></div></div>
+          <div className="credit-card-balance"><span><small>Saldo utilizado</small><strong>{moneyFor(card.currentBalance, card.currencyCode)}</strong></span><span><small>Disponible</small><strong>{moneyFor(card.availableCredit, card.currencyCode)}</strong></span></div>
+          <div className="liability-progress"><span><i style={{ width: `${Math.min(card.utilization, 100)}%` }} /></span><small>{card.utilization}% del límite utilizado</small></div>
+          <div className="credit-card-dates"><span><Icon name="calendar" size={13} /><small>Corte</small><strong>Día {card.statementDay}</strong></span><span><Icon name="clock" size={13} /><small>Pago</small><strong>Día {card.dueDay}</strong></span><span><Icon name="coins" size={13} /><small>Mínimo</small><strong>{moneyFor(card.minimumPayment, card.currencyCode)}</strong></span><span><Icon name="shield" size={13} /><small>Recomendado</small><strong>{moneyFor(card.recommendedPayment, card.currencyCode)}</strong></span></div>
+          <div className="liability-dual-actions"><button className="liability-consume-button" disabled={card.availableCredit <= 0} onClick={() => openModal("credit-card-consumption", card.id)}><Icon name="shoppingBag" size={15} /> Consumo</button><button className="liability-pay-button" disabled={card.currentBalance <= 0} onClick={() => openModal("credit-card-payment", card.id)}><Icon name="checkCircle" size={15} /> Pagar</button></div>
+        </article>)}
+        {!cards.length && <button className="liability-empty" onClick={() => openModal("credit-card")}><span><Icon name="creditCard" size={24} /></span><strong>Agrega tu primera tarjeta</strong><small>Podrás controlar límite, saldo utilizado, corte y fecha de pago.</small></button>}
+      </div>
+    </section>
+
+    <section className="page-card credit-section">
+      <div className="section-heading"><div><p className="eyebrow">Préstamos y financiamientos</p><h2>Deudas activas</h2><p>Ve cuánto has pagado, cuánto falta y cuál es tu próxima cuota.</p></div><button className="secondary-action" onClick={() => openModal("debt")}><Icon name="plus" size={14} /> Añadir deuda</button></div>
+      <div className="debt-grid">
+        {debts.map((debt) => <article className="debt-card" key={debt.id}>
+          <div className="debt-card-head"><span className="debt-icon"><Icon name={debt.debtType === "vehicle" ? "car" : debt.debtType === "education" ? "graduation" : debt.debtType === "cooperative" ? "users" : "trendingDown"} size={19} /></span><span><strong>{debt.name}</strong><small>{debt.lender || debt.debtTypeLabel} · {debt.currencyCode}</small></span><div className="liability-actions"><button onClick={() => openModal("debt-update", debt.id)} title="Editar"><Icon name="edit" size={14} /></button><button className="danger-icon" onClick={() => openModal("debt-delete", debt.id)} title="Eliminar"><Icon name="trash" size={14} /></button></div></div>
+          <div className="debt-balance"><small>Saldo pendiente</small><strong>{moneyFor(debt.currentBalance, debt.currencyCode)}</strong><span>de {moneyFor(debt.originalAmount, debt.currencyCode)}</span></div>
+          <div className="liability-progress"><span><i style={{ width: `${debt.progress}%` }} /></span><small>{debt.progress}% pagado</small></div>
+          <div className="debt-meta"><span><small>Cuota</small><strong>{moneyFor(debt.regularPayment, debt.currencyCode)}</strong></span><span><small>Próximo pago</small><strong>{debt.nextDueDate ? prettyDate(debt.nextDueDate) : "Sin fecha"}</strong></span><span><small>Interés anual</small><strong>{Number(debt.annualInterestRate || 0).toLocaleString("es-DO", { maximumFractionDigits: 3 })}%</strong></span><span><small>Fecha final</small><strong>{debt.endDate ? prettyDate(debt.endDate) : "Sin definir"}</strong></span></div>
+          <button className="liability-pay-button" disabled={debt.currentBalance <= 0} onClick={() => openModal("debt-payment", debt.id)}><Icon name="checkCircle" size={15} /> Registrar cuota/pago</button>
+        </article>)}
+        {!debts.length && <button className="liability-empty" onClick={() => openModal("debt")}><span><Icon name="trendingDown" size={24} /></span><strong>Registra una deuda</strong><small>Préstamos, vehículos, cooperativas, educación, hipoteca y otros financiamientos.</small></button>}
+      </div>
+    </section>
+
+    {(data.cardConsumptions || []).length > 0 && <section className="page-card liability-history-card">
+      <div className="section-heading"><div><p className="eyebrow">Tarjetas</p><h2>Consumos recientes</h2><p>Estos consumos sí cuentan como gasto del período; pagar la tarjeta después no los duplica.</p></div></div>
+      <div className="liability-history-list">{data.cardConsumptions.slice(0, 12).map((item) => <div key={item.id}><span className="history-icon"><Icon name="shoppingBag" size={14} /></span><span><strong>{item.description}</strong><small>{prettyDate(item.purchaseDate)} · {item.cardName} · {item.categoryName}{item.installments > 1 ? ` · ${item.installments} cuotas` : ""}</small></span><b>{moneyFor(item.amount, item.currencyCode)}</b></div>)}</div>
+    </section>}
+
+    {payments.length > 0 && <section className="page-card liability-history-card">
+      <div className="section-heading"><div><p className="eyebrow">Trazabilidad</p><h2>Pagos recientes</h2></div></div>
+      <div className="liability-history-list">{payments.slice(0, 12).map((payment) => {
+        const item = payment.liabilityType === "card" ? cards.find((card) => card.id === payment.liabilityId) : debts.find((debt) => debt.id === payment.liabilityId);
+        return <div key={payment.id}><span className="history-icon"><Icon name={payment.liabilityType === "card" ? "creditCard" : "trendingDown"} size={14} /></span><span><strong>{item?.name || (payment.liabilityType === "card" ? "Tarjeta" : "Deuda")}</strong><small>{prettyDate(payment.paymentDate)} · desde {payment.accountName}</small></span><b>{moneyFor(payment.amount, payment.currencyCode)}</b></div>;
+      })}</div>
+    </section>}
   </section>;
 }
 
@@ -1860,12 +1947,71 @@ function RecurringFields({ data, item = null }) {
   </>;
 }
 
+function CreditCardFields({ card = null, userCurrencyCode = "DOP" }) {
+  return <>
+    <label><span>Nombre para identificarla</span><input name="name" required autoFocus defaultValue={card?.name || ""} placeholder="Ej. Visa Platinum" /></label>
+    <label><span>Banco o institución</span><input name="institutionName" required defaultValue={card?.institutionName || ""} placeholder="Ej. Banreservas" /></label>
+    <label><span>Moneda</span><select name="currencyCode" defaultValue={card?.currencyCode || userCurrencyCode}>{currencyOptions.map((currency) => <option key={currency.code} value={currency.code}>{currency.label} ({currency.code})</option>)}</select></label>
+    <div className="form-grid"><label><span>Límite de crédito</span><input type="number" name="creditLimit" min="0" step="0.01" required defaultValue={card ? (card.creditLimit / 100).toFixed(2) : ""} placeholder="0.00" /></label><label><span>Saldo utilizado hoy</span><input type="number" name="currentBalance" min="0" step="0.01" required defaultValue={card ? (card.currentBalance / 100).toFixed(2) : "0.00"} /></label></div>
+    <div className="form-grid"><label><span>Día de corte</span><input type="number" name="statementDay" min="1" max="31" required defaultValue={card?.statementDay || 1} /></label><label><span>Día límite de pago</span><input type="number" name="dueDay" min="1" max="31" required defaultValue={card?.dueDay || 20} /></label></div>
+    <div className="form-grid"><label><span>Pago mínimo actual</span><input type="number" name="minimumPayment" min="0" step="0.01" required defaultValue={card ? (card.minimumPayment / 100).toFixed(2) : "0.00"} /></label><label><span>Interés anual %</span><input type="number" name="annualInterestRate" min="0" max="999.999" step="0.001" required defaultValue={card?.annualInterestRate || 0} /></label></div>
+    <label><span>Nota <small>opcional</small></span><textarea name="note" rows="3" maxLength="500" defaultValue={card?.note || ""} placeholder="Ej. La uso para compras del hogar" /></label>
+    <p className="form-note"><Icon name="info" size={14} /> El saldo utilizado puede colocarse directamente al registrar la tarjeta. No se crea un ingreso ni un gasto por ese saldo inicial.</p>
+  </>;
+}
+
+function DebtFields({ debt = null, userCurrencyCode = "DOP" }) {
+  return <>
+    <label><span>Nombre de la deuda</span><input name="name" required autoFocus defaultValue={debt?.name || ""} placeholder="Ej. Préstamo del vehículo" /></label>
+    <div className="form-grid"><label><span>Entidad o persona</span><input name="lender" defaultValue={debt?.lender || ""} placeholder="Ej. Cooperativa La Altagracia" /></label><label><span>Tipo</span><select name="debtType" defaultValue={debt?.debtType || "personal"}><option value="personal">Préstamo personal</option><option value="vehicle">Vehículo</option><option value="mortgage">Hipoteca</option><option value="education">Educación</option><option value="cooperative">Cooperativa</option><option value="family">Familiar</option><option value="business">Negocio</option><option value="other">Otra</option></select></label></div>
+    <label><span>Moneda</span><select name="currencyCode" defaultValue={debt?.currencyCode || userCurrencyCode}>{currencyOptions.map((currency) => <option key={currency.code} value={currency.code}>{currency.label} ({currency.code})</option>)}</select></label>
+    <div className="form-grid"><label><span>Monto original</span><input type="number" name="originalAmount" min="0.01" step="0.01" required defaultValue={debt ? (debt.originalAmount / 100).toFixed(2) : ""} placeholder="0.00" /></label><label><span>Saldo pendiente actual</span><input type="number" name="currentBalance" min="0" step="0.01" required defaultValue={debt ? (debt.currentBalance / 100).toFixed(2) : ""} placeholder="0.00" /></label></div>
+    <div className="form-grid"><label><span>Cuota habitual</span><input type="number" name="regularPayment" min="0" step="0.01" required defaultValue={debt ? (debt.regularPayment / 100).toFixed(2) : "0.00"} /></label><label><span>Frecuencia</span><select name="paymentFrequency" defaultValue={debt?.paymentFrequency || "monthly"}><option value="weekly">Semanal</option><option value="biweekly">Cada 2 semanas</option><option value="monthly">Mensual</option><option value="yearly">Anual</option></select></label></div>
+    <div className="form-grid"><label><span>Interés anual %</span><input type="number" name="annualInterestRate" min="0" max="999.999" step="0.001" required defaultValue={debt?.annualInterestRate || 0} /></label><label><span>Próximo pago</span><input type="date" name="nextDueDate" defaultValue={debt?.nextDueDate || ""} /></label></div>
+    <label><span>Fecha estimada de finalización <small>opcional</small></span><input type="date" name="endDate" defaultValue={debt?.endDate || ""} /></label>
+    <label><span>Nota <small>opcional</small></span><textarea name="note" rows="3" maxLength="500" defaultValue={debt?.note || ""} /></label>
+  </>;
+}
+
+function CardConsumptionFields({ card, data }) {
+  const { moneyFor } = useMoney();
+  const categories = data.categories;
+  return <>
+    <div className="modal-context"><span className="goal-round-icon"><Icon name="creditCard" size={18} /></span><span><small>Crédito disponible</small><strong>{moneyFor(card?.availableCredit || 0, card?.currencyCode || "DOP")}</strong></span></div>
+    <label><span>Concepto</span><input name="description" required autoFocus maxLength="255" placeholder="Ej. Supermercado, gasolina, compra online" /></label>
+    <label><span>Monto total cargado</span><input type="number" name="amount" min="0.01" max={((card?.availableCredit || 0) / 100).toFixed(2)} step="0.01" required placeholder="0.00" /></label>
+    <label><span>Categoría</span><select name="categoryId" required defaultValue={categories[0]?.id || ""}>{categories.map((category) => <option key={category.id} value={category.id}>{category.parentId ? `${category.parentDisplayName || "Categoría"} › ${category.name}` : category.name}</option>)}</select></label>
+    <div className="form-grid"><label><span>Fecha de compra</span><input type="date" name="purchaseDate" required defaultValue={todayIso()} /></label><label><span>Número de cuotas</span><input type="number" name="installments" min="1" max="120" required defaultValue="1" /></label></div>
+    <label><span>Nota <small>opcional</small></span><input name="note" maxLength="500" /></label>
+    <p className="form-note"><Icon name="info" size={14} /> Clara suma este consumo al saldo de la tarjeta y lo incluye como gasto del período. Las cuotas quedan registradas como referencia; la distribución automática por estado de cuenta podrá evolucionar en versiones posteriores.</p>
+  </>;
+}
+
+function LiabilityPaymentFields({ item, type, data }) {
+  const { moneyFor } = useMoney();
+  const currencyCode = item?.currencyCode || "DOP";
+  const balance = Number(item?.currentBalance || 0);
+  const suggested = type === "card" ? Math.min(Number(item?.minimumPayment || 0), balance) : Math.min(Number(item?.regularPayment || 0), balance);
+  const accounts = data.accounts.filter((account) => account.currencyCode === currencyCode);
+  return <>
+    <div className="modal-context"><span className="goal-round-icon"><Icon name={type === "card" ? "creditCard" : "trendingDown"} size={18} /></span><span><small>Saldo pendiente</small><strong>{moneyFor(balance, currencyCode)}</strong></span></div>
+    <label><span>Monto del pago</span><input type="number" name="amount" min="0.01" max={(balance / 100).toFixed(2)} step="0.01" required autoFocus defaultValue={suggested > 0 ? (suggested / 100).toFixed(2) : ""} /></label>
+    <label><span>Pagar desde</span><select name="accountId" required defaultValue={accounts[0]?.id || ""}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name} — {moneyFor(account.balance, account.currencyCode)}</option>)}</select></label>
+    <label><span>Fecha del pago</span><input type="date" name="paymentDate" required defaultValue={todayIso()} /></label>
+    <label><span>Nota <small>opcional</small></span><input name="note" maxLength="500" placeholder="Ej. Pago realizado desde la app bancaria" /></label>
+    {!accounts.length && <p className="form-error">No tienes una cuenta activa en {currencyCode}. Agrega una cuenta con esa moneda antes de registrar el pago.</p>}
+    <p className="form-note"><Icon name="info" size={14} /> Clara descontará el dinero de la cuenta seleccionada y reducirá la obligación. Este pago no se vuelve a contar automáticamente como un gasto para evitar duplicar consumos ya registrados.</p>
+  </>;
+}
+
 function OperationModal({ modal, data, saving, error, user, onClose, onSubmit }) {
   const { money, moneyFor, currencySymbol } = useMoney();
   const category = data.categories.find((item) => item.id === modal.referenceId);
   const goal = data.goals.find((item) => item.id === modal.referenceId);
   const account = data.accounts.find((item) => item.id === modal.referenceId);
   const recurring = data.recurringPayments?.find((item) => item.id === modal.referenceId);
+  const creditCard = data.creditCards?.find((item) => item.id === modal.referenceId);
+  const debt = data.debts?.find((item) => item.id === modal.referenceId);
   const suggestedParent = modal.kind === "category" && modal.referenceId ? data.categories.find((item) => item.id === modal.referenceId) : null;
   const titles = {
     expense: { eyebrow: "Nuevo movimiento", title: "Registrar gasto", submit: "Guardar gasto" },
@@ -1886,7 +2032,17 @@ function OperationModal({ modal, data, saving, error, user, onClose, onSubmit })
     "account-history": { eyebrow: "Trazabilidad del saldo", title: account?.name ?? "Historial de cuenta", submit: "Cerrar" },
     category: { eyebrow: suggestedParent ? "Nueva subcategoría" : "Nueva categoría", title: suggestedParent ? `Dentro de ${suggestedParent.name}` : "Crear categoría", submit: "Crear categoría" },
     "category-update": { eyebrow: "Editar categoría", title: category?.name ?? "Editar categoría", submit: "Guardar categoría" },
-    "category-delete": { eyebrow: "Eliminar categoría", title: category?.name ?? "Eliminar categoría", submit: "Eliminar categoría", danger: true },
+    "category-delete": { eyebrow: category?.isSystem ? "Ocultar categoría" : "Eliminar categoría", title: category?.name ?? "Eliminar categoría", submit: category?.isSystem ? "Ocultar de mi perfil" : "Eliminar categoría", danger: true },
+    "category-restore": { eyebrow: "Categorías base", title: "Restaurar categorías ocultas", submit: "Restaurar categorías" },
+    "credit-card": { eyebrow: "Nueva tarjeta", title: "Registrar tarjeta de crédito", submit: "Guardar tarjeta" },
+    "credit-card-update": { eyebrow: "Editar tarjeta", title: creditCard?.name ?? "Editar tarjeta", submit: "Guardar cambios" },
+    "credit-card-consumption": { eyebrow: "Nuevo consumo", title: creditCard?.name ?? "Registrar consumo", submit: "Registrar consumo" },
+    "credit-card-delete": { eyebrow: "Eliminar tarjeta", title: creditCard?.name ?? "Eliminar tarjeta", submit: "Eliminar tarjeta", danger: true },
+    "credit-card-payment": { eyebrow: "Pago de tarjeta", title: creditCard?.name ?? "Registrar pago", submit: "Registrar pago" },
+    debt: { eyebrow: "Nueva deuda", title: "Registrar préstamo o financiamiento", submit: "Guardar deuda" },
+    "debt-update": { eyebrow: "Editar deuda", title: debt?.name ?? "Editar deuda", submit: "Guardar cambios" },
+    "debt-delete": { eyebrow: "Eliminar deuda", title: debt?.name ?? "Eliminar deuda", submit: "Eliminar deuda", danger: true },
+    "debt-payment": { eyebrow: "Pago de deuda", title: debt?.name ?? "Registrar pago", submit: "Registrar pago" },
     "plan-purpose": { eyebrow: "Tu enfoque", title: "Propósito del período", submit: "Guardar propósito" },
   };
   const copy = titles[modal.kind] || titles.expense;
@@ -1974,8 +2130,21 @@ function OperationModal({ modal, data, saving, error, user, onClose, onSubmit })
         {modal.kind === "category-update" && category && <CategoryFields data={data} category={category} />}
         {modal.kind === "category-delete" && category && <div className="danger-confirmation">
           <span><Icon name="trash" size={20} /></span>
-          <div><strong>¿Eliminar {category.name}?</strong><p>Si ya tiene movimientos, Clara la ocultará para nuevos registros pero conservará el historial anterior.</p></div>
+          <div><strong>{category.isSystem ? `¿Ocultar ${category.name} de tu perfil?` : `¿Eliminar ${category.name}?`}</strong><p>{category.isSystem ? "No se elimina la categoría global de Clara. Solo dejará de aparecer para este usuario y podrás restaurarla después." : "Si ya tiene movimientos, Clara la ocultará para nuevos registros pero conservará el historial anterior."}</p></div>
         </div>}
+
+        {modal.kind === "category-restore" && <div className="copy-budget-confirmation"><span><Icon name="refresh" size={21} /></span><div><strong>Restaurar categorías base</strong><p>Volverán a mostrarse todas las categorías base de Clara que hayas ocultado. Tus categorías personalizadas no cambian.</p></div></div>}
+
+        {modal.kind === "credit-card" && <CreditCardFields userCurrencyCode={user?.currencyCode} />}
+        {modal.kind === "credit-card-update" && creditCard && <CreditCardFields card={creditCard} userCurrencyCode={user?.currencyCode} />}
+        {modal.kind === "credit-card-consumption" && creditCard && <CardConsumptionFields card={creditCard} data={data} />}
+        {modal.kind === "credit-card-payment" && creditCard && <LiabilityPaymentFields item={creditCard} type="card" data={data} />}
+        {modal.kind === "credit-card-delete" && creditCard && <div className="danger-confirmation"><span><Icon name="trash" size={20} /></span><div><strong>¿Eliminar {creditCard.name}?</strong><p>Se archivará la tarjeta y se conservará el historial de pagos registrado en Clara.</p></div></div>}
+
+        {modal.kind === "debt" && <DebtFields userCurrencyCode={user?.currencyCode} />}
+        {modal.kind === "debt-update" && debt && <DebtFields debt={debt} userCurrencyCode={user?.currencyCode} />}
+        {modal.kind === "debt-payment" && debt && <LiabilityPaymentFields item={debt} type="debt" data={data} />}
+        {modal.kind === "debt-delete" && debt && <div className="danger-confirmation"><span><Icon name="trash" size={20} /></span><div><strong>¿Eliminar {debt.name}?</strong><p>Se archivará la deuda y sus pagos anteriores seguirán disponibles en el historial.</p></div></div>}
 
         {modal.kind === "plan-purpose" && <>
           <label><span>¿Cómo quieres organizarte?</span><select name="planningPeriod" defaultValue={user?.profile?.planningPeriod || "monthly"}><option value="monthly">Por mes</option><option value="biweekly">Por quincena</option></select></label>

@@ -179,6 +179,24 @@ function recurringFrequencyLabel(value) {
   return { weekly: "Semanal", biweekly: "Cada 2 semanas", monthly: "Mensual", yearly: "Anual" }[value] || "Mensual";
 }
 
+function nextMonthlyDay(today, requestedDay) {
+  const [year, month] = String(today).slice(0, 10).split("-").map(Number);
+  const sameDay = clampDay(year, month, requestedDay);
+  const sameMonth = isoFromParts(year, month, sameDay);
+  if (sameMonth >= today) return sameMonth;
+  const index = year * 12 + month;
+  const nextYear = Math.floor(index / 12);
+  const nextMonth = (index % 12) + 1;
+  return isoFromParts(nextYear, nextMonth, clampDay(nextYear, nextMonth, requestedDay));
+}
+
+function debtTypeLabel(value) {
+  return {
+    personal: "Préstamo personal", vehicle: "Vehículo", mortgage: "Hipoteca", education: "Educación",
+    cooperative: "Cooperativa", family: "Familiar", business: "Negocio", other: "Otra deuda",
+  }[value] || "Deuda";
+}
+
 function monthBounds(dateValue) {
   const [year, month] = String(dateValue).slice(0, 7).split("-").map(Number);
   const monthText = String(month).padStart(2, "0");
@@ -248,11 +266,18 @@ export async function getFinanceData(database, userId) {
      FROM categories c
      LEFT JOIN categories parent ON parent.id = c.parent_id
      LEFT JOIN budgets b ON b.category_id = c.id AND b.user_id = ?
+     LEFT JOIN user_hidden_categories hidden ON hidden.category_id = c.id AND hidden.user_id = ?
      WHERE COALESCE(c.is_active, 1) = 1
        AND (c.user_id IS NULL OR c.user_id = ?)
+       AND hidden.category_id IS NULL
      ORDER BY CASE WHEN c.parent_id IS NULL THEN 0 ELSE 1 END,
        COALESCE(c.parent_id, c.id), c.created_at, c.id`,
-    [userId, userId],
+    [userId, userId, userId],
+  );
+
+  const hiddenCategoryRow = await database.get(
+    "SELECT COUNT(*) AS total FROM user_hidden_categories WHERE user_id = ?",
+    [userId],
   );
 
   const budgetRows = await database.all(
@@ -357,6 +382,58 @@ export async function getFinanceData(database, userId) {
     [primaryCurrency, userId],
   );
 
+  const creditCardRows = await database.all(
+    `SELECT id, name, institution_name AS institutionName, currency_code AS currencyCode,
+      credit_limit AS creditLimit, current_balance AS currentBalance, statement_day AS statementDay,
+      due_day AS dueDay, minimum_payment AS minimumPayment, annual_interest_rate AS annualInterestRate,
+      COALESCE(note, '') AS note, created_at AS createdAt, updated_at AS updatedAt
+     FROM credit_cards
+     WHERE user_id = ? AND COALESCE(is_active, 1) = 1
+     ORDER BY created_at, id`,
+    [userId],
+  );
+
+  const debtRows = await database.all(
+    `SELECT id, name, lender, debt_type AS debtType, currency_code AS currencyCode,
+      original_amount AS originalAmount, current_balance AS currentBalance, regular_payment AS regularPayment,
+      payment_frequency AS paymentFrequency, annual_interest_rate AS annualInterestRate,
+      next_due_date AS nextDueDate, end_date AS endDate, COALESCE(note, '') AS note,
+      created_at AS createdAt, updated_at AS updatedAt
+     FROM debts
+     WHERE user_id = ? AND COALESCE(is_active, 1) = 1
+     ORDER BY CASE WHEN next_due_date IS NULL THEN 1 ELSE 0 END, next_due_date, created_at, id`,
+    [userId],
+  );
+
+  const liabilityPaymentRows = await database.all(
+    `SELECT lp.id, lp.liability_type AS liabilityType, lp.liability_id AS liabilityId,
+      lp.source_account_id AS sourceAccountId, lp.amount, lp.payment_date AS paymentDate,
+      COALESCE(lp.note, '') AS note, lp.created_at AS createdAt, a.name AS accountName,
+      COALESCE(a.currency_code, ?) AS currencyCode
+     FROM liability_payments lp
+     JOIN accounts a ON a.id = lp.source_account_id AND a.user_id = lp.user_id
+     WHERE lp.user_id = ?
+     ORDER BY lp.payment_date DESC, lp.created_at DESC, lp.id DESC
+     LIMIT 120`,
+    [primaryCurrency, userId],
+  );
+
+  const cardConsumptionRows = await database.all(
+    `SELECT cc.id, cc.card_id AS cardId, cc.description, cc.amount, cc.category_id AS categoryId,
+      cc.purchase_date AS purchaseDate, cc.installments, COALESCE(cc.note, '') AS note, cc.created_at AS createdAt,
+      card.name AS cardName, card.institution_name AS institutionName, card.currency_code AS currencyCode,
+      COALESCE(NULLIF(c.display_name, ''), c.name) AS categoryName, c.color AS categoryColor,
+      c.parent_id AS parentCategoryId, COALESCE(NULLIF(parent.display_name, ''), parent.name) AS parentCategoryName
+     FROM credit_card_consumptions cc
+     JOIN credit_cards card ON card.id = cc.card_id AND card.user_id = cc.user_id
+     JOIN categories c ON c.id = cc.category_id
+     LEFT JOIN categories parent ON parent.id = c.parent_id
+     WHERE cc.user_id = ?
+     ORDER BY cc.purchase_date DESC, cc.created_at DESC, cc.id DESC
+     LIMIT 200`,
+    [userId],
+  );
+
   const normalizedAccounts = accounts.map((account) => ({
     ...account,
     id: Number(account.id),
@@ -364,8 +441,19 @@ export async function getFinanceData(database, userId) {
     currencyCode: String(account.currencyCode || primaryCurrency).toUpperCase(),
   }));
 
+  const cardConsumptions = cardConsumptionRows.map((item) => ({
+    ...item, id: Number(item.id), cardId: Number(item.cardId), categoryId: Number(item.categoryId),
+    parentCategoryId: item.parentCategoryId ? Number(item.parentCategoryId) : null, amount: normalizeNumber(item.amount),
+    installments: Number(item.installments || 1), purchaseDate: dateText(item.purchaseDate), createdAt: timestampText(item.createdAt),
+    currencyCode: String(item.currencyCode || primaryCurrency).toUpperCase(),
+  }));
+
   const budgetMap = new Map(budgetRows.map((row) => [Number(row.categoryId), row]));
   const spendMap = new Map(spendRows.map((row) => [Number(row.categoryId), normalizeNumber(row.spent)]));
+  for (const consumption of cardConsumptions) {
+    if (consumption.purchaseDate < period.start || consumption.purchaseDate > period.end || consumption.currencyCode !== primaryCurrency) continue;
+    spendMap.set(consumption.categoryId, (spendMap.get(consumption.categoryId) || 0) + consumption.amount);
+  }
 
   let normalizedCategories = categoryRows.map((category) => {
     const id = Number(category.id);
@@ -471,6 +559,43 @@ export async function getFinanceData(database, userId) {
     updatedAt: timestampText(item.updatedAt),
   }));
 
+  const creditCards = creditCardRows.map((card) => {
+    const creditLimit = normalizeNumber(card.creditLimit);
+    const currentBalance = normalizeNumber(card.currentBalance);
+    return {
+      ...card, id: Number(card.id), creditLimit, currentBalance,
+      statementDay: Number(card.statementDay || 1), dueDay: Number(card.dueDay || 20),
+      minimumPayment: normalizeNumber(card.minimumPayment), annualInterestRate: Number(card.annualInterestRate || 0),
+      currencyCode: String(card.currencyCode || primaryCurrency).toUpperCase(),
+      availableCredit: Math.max(creditLimit - currentBalance, 0),
+      recommendedPayment: currentBalance,
+      utilization: creditLimit > 0 ? Math.round((currentBalance / creditLimit) * 100) : 0,
+      createdAt: timestampText(card.createdAt), updatedAt: timestampText(card.updatedAt),
+    };
+  });
+
+  const debts = debtRows.map((debt) => {
+    const originalAmount = normalizeNumber(debt.originalAmount);
+    const currentBalance = normalizeNumber(debt.currentBalance);
+    return {
+      ...debt, id: Number(debt.id), originalAmount, currentBalance, regularPayment: normalizeNumber(debt.regularPayment),
+      annualInterestRate: Number(debt.annualInterestRate || 0),
+      currencyCode: String(debt.currencyCode || primaryCurrency).toUpperCase(),
+      nextDueDate: dateText(debt.nextDueDate), endDate: dateText(debt.endDate),
+      debtTypeLabel: debtTypeLabel(debt.debtType),
+      paidAmount: Math.max(originalAmount - currentBalance, 0),
+      progress: originalAmount > 0 ? Math.min(100, Math.round(((originalAmount - currentBalance) / originalAmount) * 100)) : 0,
+      paymentFrequencyLabel: recurringFrequencyLabel(debt.paymentFrequency),
+      createdAt: timestampText(debt.createdAt), updatedAt: timestampText(debt.updatedAt),
+    };
+  });
+
+  const liabilityPayments = liabilityPaymentRows.map((payment) => ({
+    ...payment, id: Number(payment.id), liabilityId: Number(payment.liabilityId), sourceAccountId: Number(payment.sourceAccountId),
+    amount: normalizeNumber(payment.amount), paymentDate: dateText(payment.paymentDate), createdAt: timestampText(payment.createdAt),
+    currencyCode: String(payment.currencyCode || primaryCurrency).toUpperCase(),
+  }));
+
   const currencyTotals = normalizedAccounts.reduce((totals, account) => {
     totals[account.currencyCode] = (totals[account.currencyCode] || 0) + account.balance;
     return totals;
@@ -497,6 +622,12 @@ export async function getFinanceData(database, userId) {
     }
     cashflowByCurrency[code].income += normalizeNumber(row.income);
     cashflowByCurrency[code].expenses += normalizeNumber(row.expenses);
+  }
+  for (const consumption of cardConsumptions) {
+    if (consumption.purchaseDate < period.start || consumption.purchaseDate > period.end) continue;
+    const code = consumption.currencyCode;
+    if (!cashflowByCurrency[code]) cashflowByCurrency[code] = { income: 0, expenses: 0 };
+    cashflowByCurrency[code].expenses += consumption.amount;
   }
   const primaryCashflow = cashflowByCurrency[primaryCurrency] || { income: 0, expenses: 0 };
 
@@ -564,6 +695,26 @@ export async function getFinanceData(database, userId) {
   }
   recurringOccurrences.sort((a, b) => `${a.date}|${a.name}`.localeCompare(`${b.date}|${b.name}`));
 
+  const liabilityOccurrences = [];
+  for (const card of creditCards) {
+    if (card.currentBalance <= 0 || card.minimumPayment <= 0) continue;
+    const date = nextMonthlyDay(period.today, card.dueDay);
+    liabilityOccurrences.push({
+      id: card.id, kind: "card", referenceId: card.id, name: card.name, date, overdue: false,
+      amount: Math.min(card.minimumPayment, card.currentBalance), currencyCode: card.currencyCode,
+      accountName: card.institutionName || "Tarjeta", categoryName: "Tarjeta de crédito",
+    });
+  }
+  for (const debt of debts) {
+    if (debt.currentBalance <= 0 || !debt.nextDueDate || debt.regularPayment <= 0) continue;
+    liabilityOccurrences.push({
+      id: debt.id, kind: "debt", referenceId: debt.id, name: debt.name, date: debt.nextDueDate,
+      overdue: debt.nextDueDate < period.today, amount: Math.min(debt.regularPayment, debt.currentBalance),
+      currencyCode: debt.currencyCode, accountName: debt.lender || "Deuda", categoryName: debt.debtTypeLabel,
+    });
+  }
+  liabilityOccurrences.sort((a, b) => `${a.date}|${a.name}`.localeCompare(`${b.date}|${b.name}`));
+
   const primaryOccurrences = recurringOccurrences.filter((item) => item.currencyCode === primaryCurrency);
   const recurringBeforeSafe = primaryOccurrences.filter((item) => !item.overdue && item.date >= period.today && item.date <= safeUntil);
   const overduePrimary = primaryOccurrences.filter((item) => item.overdue);
@@ -576,10 +727,11 @@ export async function getFinanceData(database, userId) {
   }
 
   let recurringReserveExtra = 0;
+  let liabilityReserve = 0;
+  let remainingCoverage = new Map(fixedCoverage);
   if (usingProfileFixedFallback) {
     recurringReserveExtra = Math.max(recurringDueBeforeSafeTotal - fixedReserve, 0);
   } else {
-    const remainingCoverage = new Map(fixedCoverage);
     for (const occurrence of [...overduePrimary, ...recurringBeforeSafe]) {
       const category = categoryByIdMap.get(occurrence.categoryId);
       const rootId = category?.parentId || category?.id;
@@ -596,7 +748,22 @@ export async function getFinanceData(database, userId) {
       recurringReserveExtra += occurrence.amount - covered;
     }
   }
-  const protectedCommitments = fixedReserve + recurringReserveExtra;
+
+  const primaryLiabilityDue = liabilityOccurrences.filter((item) => item.currencyCode === primaryCurrency && (item.overdue || (item.date >= period.today && item.date <= safeUntil)));
+  if (usingProfileFixedFallback) {
+    liabilityReserve = primaryLiabilityDue.reduce((sum, item) => sum + item.amount, 0);
+  } else {
+    for (const occurrence of primaryLiabilityDue) {
+      const debtCategoryId = 10;
+      const coverageId = remainingCoverage.has(debtCategoryId) ? debtCategoryId : null;
+      if (!coverageId) { liabilityReserve += occurrence.amount; continue; }
+      const availableCoverage = remainingCoverage.get(coverageId) || 0;
+      const covered = Math.min(availableCoverage, occurrence.amount);
+      remainingCoverage.set(coverageId, availableCoverage - covered);
+      liabilityReserve += occurrence.amount - covered;
+    }
+  }
+  const protectedCommitments = fixedReserve + recurringReserveExtra + liabilityReserve;
 
   const targetSavingsReserve = Math.round(primaryCashflow.income * Math.max(0, Math.min(profile.savingsTargetPercent, 100)) / 100);
   const savingsReserve = Math.max(explicitSavingsReserve, targetSavingsReserve);
@@ -611,30 +778,36 @@ export async function getFinanceData(database, userId) {
   const incomeReference = Math.max(primaryCashflow.income, expectedPeriodIncome);
   const unassignedBudget = Math.max(incomeReference - budgetTotal, 0);
 
+  const commitmentOccurrences = [
+    ...recurringOccurrences.map((item) => ({ ...item, kind: "recurring", referenceId: item.id })),
+    ...liabilityOccurrences,
+  ].sort((a, b) => `${a.date}|${a.name}`.localeCompare(`${b.date}|${b.name}`));
+
   const windowSummary = (days) => {
     const end = addDays(period.today, days);
-    const allItems = recurringOccurrences.filter((item) => !item.overdue && item.date >= period.today && item.date <= end);
+    const allItems = commitmentOccurrences.filter((item) => !item.overdue && item.date >= period.today && item.date <= end);
     const items = allItems.filter((item) => item.currencyCode === primaryCurrency);
     const totalsByCurrency = {};
     for (const item of allItems) totalsByCurrency[item.currencyCode] = (totalsByCurrency[item.currencyCode] || 0) + item.amount;
     return { days, count: items.length, countAll: allItems.length, total: items.reduce((sum, item) => sum + item.amount, 0), totalsByCurrency };
   };
-  const overdueCommitments = recurringOccurrences.filter((item) => item.overdue).map((item) => ({
-    id: item.id, name: item.name, amount: item.amount, date: item.date, currencyCode: item.currencyCode,
+  const overdueCommitments = commitmentOccurrences.filter((item) => item.overdue).map((item) => ({
+    id: item.id, referenceId: item.referenceId, kind: item.kind, name: item.name, amount: item.amount, date: item.date, currencyCode: item.currencyCode,
     accountName: item.accountName, categoryName: item.categoryName, overdue: true,
   }));
-  const upcomingCommitments = recurringOccurrences
+  const upcomingCommitments = commitmentOccurrences
     .filter((item) => !item.overdue && item.date >= period.today && item.date <= horizon30)
-    .slice(0, 40)
+    .slice(0, 60)
     .map((item) => ({
-      id: item.id, name: item.name, amount: item.amount, date: item.date, currencyCode: item.currencyCode,
+      id: item.id, referenceId: item.referenceId, kind: item.kind, name: item.name, amount: item.amount, date: item.date, currencyCode: item.currencyCode,
       accountName: item.accountName, categoryName: item.categoryName, projected: item.projected,
     }));
 
-  const calendarEvents = recurringOccurrences
+  const calendarEvents = commitmentOccurrences
     .filter((item) => item.date >= calendarBounds.start && item.date <= calendarBounds.end)
     .map((item) => ({
-      id: `recurring-${item.id}-${item.date}`, type: "recurring", recurringId: item.id, date: item.date,
+      id: `${item.kind}-${item.id}-${item.date}`, type: item.kind, referenceId: item.referenceId, recurringId: item.kind === "recurring" ? item.id : null,
+      cardId: item.kind === "card" ? item.id : null, debtId: item.kind === "debt" ? item.id : null, date: item.date,
       title: item.name, amount: item.amount, currencyCode: item.currencyCode, mandatory: item.isMandatory, projected: item.projected,
       categoryName: item.categoryName, accountName: item.accountName, overdue: item.overdue,
     }));
@@ -676,6 +849,14 @@ export async function getFinanceData(database, userId) {
       remaining: category.remaining,
     }))
     .sort((a, b) => b.percentage - a.percentage);
+
+  const creditUsedTotal = creditCards.filter((card) => card.currencyCode === primaryCurrency).reduce((sum, card) => sum + card.currentBalance, 0);
+  const creditLimitTotal = creditCards.filter((card) => card.currencyCode === primaryCurrency).reduce((sum, card) => sum + card.creditLimit, 0);
+  const debtBalanceTotal = debts.filter((debt) => debt.currencyCode === primaryCurrency).reduce((sum, debt) => sum + debt.currentBalance, 0);
+  const monthlyDebtCommitment = creditCards.filter((card) => card.currencyCode === primaryCurrency).reduce((sum, card) => sum + Math.min(card.minimumPayment, card.currentBalance), 0)
+    + debts.filter((debt) => debt.currencyCode === primaryCurrency).reduce((sum, debt) => sum + Math.min(debt.regularPayment, debt.currentBalance), 0);
+  const liabilitiesTotal = creditUsedTotal + debtBalanceTotal;
+  const netWorth = primaryBalance - liabilitiesTotal;
 
   const balanceHistory = [];
   for (const transaction of normalizedTransactions) {
@@ -751,6 +932,11 @@ export async function getFinanceData(database, userId) {
     balanceHistory: balanceHistory.slice(0, 400),
     goals: normalizedGoals,
     recurringPayments,
+    creditCards,
+    debts,
+    liabilityPayments,
+    cardConsumptions,
+    hiddenSystemCategoriesCount: Number(hiddenCategoryRow?.total || 0),
     calendar: {
       monthStart: calendarBounds.start,
       monthEnd: calendarBounds.end,
@@ -774,6 +960,7 @@ export async function getFinanceData(database, userId) {
       liquidBalance,
       fixedReserve,
       recurringReserve: recurringReserveExtra,
+      liabilityReserve,
       protectedCommitments,
       savingsReserve,
       safeToSpend,
@@ -808,10 +995,18 @@ export async function getFinanceData(database, userId) {
       dailySafeToSpend,
       fixedReserve,
       recurringReserve: recurringReserveExtra,
+      liabilityReserve,
       protectedCommitments,
       savingsReserve,
       liquidBalance,
       budgetAlertCount: budgetAlerts.length,
+      creditUsedTotal,
+      creditLimitTotal,
+      creditAvailableTotal: Math.max(creditLimitTotal - creditUsedTotal, 0),
+      debtBalanceTotal,
+      liabilitiesTotal,
+      monthlyDebtCommitment,
+      netWorth,
     },
   };
 }

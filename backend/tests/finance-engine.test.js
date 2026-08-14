@@ -360,3 +360,80 @@ test("Clara 3.2 permite editar y desactivar compromisos recurrentes", async () =
 
   database.close();
 });
+
+test("Clara 3.3 permite ocultar y restaurar categorías base por usuario", async () => {
+  const database = createSqliteDatabase(":memory:");
+  const userId = await createUser(database, { username: "categorias33" });
+  const { deleteCategory, restoreSystemCategories } = await import("../src/finance-engine.js");
+
+  let data = await getFinanceData(database, userId);
+  assert.ok(data.categories.some((item) => item.id === 1));
+
+  await deleteCategory(database, userId, { categoryId: 1 });
+  data = await getFinanceData(database, userId);
+  assert.equal(data.categories.some((item) => item.id === 1), false);
+  assert.equal(data.hiddenSystemCategoriesCount, 1);
+
+  await restoreSystemCategories(database, userId);
+  data = await getFinanceData(database, userId);
+  assert.ok(data.categories.some((item) => item.id === 1));
+  assert.equal(data.hiddenSystemCategoriesCount, 0);
+  database.close();
+});
+
+test("Clara 3.3 controla tarjetas, deudas y pagos sin duplicarlos como gasto", async () => {
+  const database = createSqliteDatabase(":memory:");
+  const userId = await createUser(database, { username: "credito33", planningPeriod: "monthly" });
+  const {
+    createCreditCard, createCreditCardConsumption, createDebt, payCreditCard, payDebt,
+  } = await import("../src/finance-engine.js");
+
+  await createAccount(database, userId, {
+    institutionType: "bank", institutionName: "Banreservas", productType: "payroll", amount: "50000", currencyCode: "DOP",
+  });
+  let data = await getFinanceData(database, userId);
+  const account = data.accounts.find((item) => item.institutionName === "Banreservas");
+
+  await createCreditCard(database, userId, {
+    name: "Visa", institutionName: "Banreservas", currencyCode: "DOP",
+    creditLimit: "100000", currentBalance: "20000", statementDay: "5", dueDay: "25",
+    minimumPayment: "2500", annualInterestRate: "36",
+  });
+  await createDebt(database, userId, {
+    name: "Préstamo vehículo", lender: "Cooperativa", debtType: "vehicle", currencyCode: "DOP",
+    originalAmount: "300000", currentBalance: "240000", regularPayment: "12000", paymentFrequency: "monthly",
+    annualInterestRate: "18", nextDueDate: new Date().toISOString().slice(0, 10),
+  });
+
+  data = await getFinanceData(database, userId);
+  const groceries = data.categories.find((item) => item.id === 2);
+  await createCreditCardConsumption(database, userId, {
+    cardId: data.creditCards[0].id, description: "Supermercado", amount: "1000", categoryId: groceries.id,
+    purchaseDate: new Date().toISOString().slice(0, 10), installments: "1",
+  });
+
+  data = await getFinanceData(database, userId);
+  assert.equal(data.creditCards.length, 1);
+  assert.equal(data.debts.length, 1);
+  assert.equal(data.summary.creditUsedTotal, 2100000);
+  assert.equal(data.summary.periodExpenses, 100000, "El consumo de tarjeta sí cuenta como gasto");
+  assert.equal(data.cardConsumptions.length, 1);
+  assert.equal(data.summary.debtBalanceTotal, 24000000);
+  assert.ok(data.summary.liabilitiesTotal > 0);
+  assert.ok(data.calendar.events.some((event) => event.type === "card"));
+  assert.ok(data.calendar.events.some((event) => event.type === "debt"));
+  assert.ok(data.budgetPlan.liabilityReserve >= 1200000, "Las obligaciones próximas deben proteger dinero seguro para gastar");
+
+  const card = data.creditCards[0];
+  const debt = data.debts[0];
+  await payCreditCard(database, userId, { cardId: card.id, accountId: account.id, amount: "2500", paymentDate: new Date().toISOString().slice(0, 10) });
+  await payDebt(database, userId, { debtId: debt.id, accountId: account.id, amount: "12000", paymentDate: new Date().toISOString().slice(0, 10) });
+
+  data = await getFinanceData(database, userId);
+  assert.equal(data.creditCards[0].currentBalance, 1850000);
+  assert.equal(data.debts[0].currentBalance, 22800000);
+  assert.equal(data.liabilityPayments.length, 2);
+  assert.equal(data.summary.periodExpenses, 100000, "Pagar pasivos no debe duplicar el consumo ya registrado como gasto");
+  assert.equal(data.accounts.find((item) => item.id === account.id).balance, 3550000);
+  database.close();
+});

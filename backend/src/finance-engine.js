@@ -819,13 +819,23 @@ export async function deleteCategory(database, userId, payload) {
   if (!categoryId) throw requestError("Selecciona una categoría válida.");
 
   const category = await database.get(
-    "SELECT id FROM categories WHERE id = ? AND user_id = ? AND COALESCE(is_system, 0) = 0",
+    `SELECT id, user_id AS ownerUserId, COALESCE(is_system, 0) AS isSystem
+     FROM categories WHERE id = ? AND COALESCE(is_active, 1) = 1 AND (user_id IS NULL OR user_id = ?)`,
     [categoryId, userId],
   );
-  if (!category) throw requestError("Las categorías base de Clara no se pueden eliminar.", 403);
+  if (!category) throw requestError("La categoría no existe.", 404);
 
-  const child = await database.get("SELECT id FROM categories WHERE parent_id = ? AND COALESCE(is_active, 1) = 1 LIMIT 1", [categoryId]);
+  const child = await database.get(
+    `SELECT id FROM categories WHERE parent_id = ? AND user_id = ? AND COALESCE(is_active, 1) = 1 LIMIT 1`,
+    [categoryId, userId],
+  );
   if (child) throw requestError("Primero elimina o mueve las subcategorías que están dentro de esta categoría.");
+
+  if (Boolean(Number(category.isSystem || 0)) || category.ownerUserId === null || category.ownerUserId === undefined) {
+    const hidden = await database.get("SELECT user_id FROM user_hidden_categories WHERE user_id = ? AND category_id = ?", [userId, categoryId]);
+    if (!hidden) await database.run("INSERT INTO user_hidden_categories (user_id, category_id) VALUES (?, ?)", [userId, categoryId]);
+    return;
+  }
 
   const history = await database.get("SELECT COUNT(*) AS total FROM transactions WHERE user_id = ? AND category_id = ?", [userId, categoryId]);
   const budget = await database.get("SELECT COUNT(*) AS total FROM budgets WHERE user_id = ? AND category_id = ?", [userId, categoryId]);
@@ -835,4 +845,200 @@ export async function deleteCategory(database, userId, payload) {
     return;
   }
   await database.run("DELETE FROM categories WHERE id = ? AND user_id = ?", [categoryId, userId]);
+}
+
+
+const DEBT_TYPES = new Set(["personal", "vehicle", "mortgage", "education", "cooperative", "family", "business", "other"]);
+
+function percentageNumber(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number) || number < 0 || number > 999.999) return null;
+  return Math.round(number * 1000) / 1000;
+}
+
+function dayOfMonth(value, fallback) {
+  const day = Number(value);
+  return Number.isInteger(day) && day >= 1 && day <= 31 ? day : fallback;
+}
+
+async function creditCardById(database, cardId, userId) {
+  return database.get(
+    `SELECT id, name, institution_name AS institutionName, currency_code AS currencyCode,
+      credit_limit AS creditLimit, current_balance AS currentBalance, statement_day AS statementDay,
+      due_day AS dueDay, minimum_payment AS minimumPayment, annual_interest_rate AS annualInterestRate,
+      COALESCE(note, '') AS note
+     FROM credit_cards WHERE id = ? AND user_id = ? AND COALESCE(is_active, 1) = 1`,
+    [cardId, userId],
+  );
+}
+
+function creditCardPayload(payload, fallbackCurrency = "DOP") {
+  const name = String(payload.name || "").trim().slice(0, 160);
+  const institutionName = String(payload.institutionName || "").trim().slice(0, 160);
+  const currencyCode = normalizeCurrency(payload.currencyCode, fallbackCurrency);
+  const creditLimit = amountInCents(payload.creditLimit, true);
+  const currentBalance = amountInCents(payload.currentBalance, true);
+  const minimumPayment = amountInCents(payload.minimumPayment, true);
+  const annualInterestRate = percentageNumber(payload.annualInterestRate);
+  const statementDay = dayOfMonth(payload.statementDay, 1);
+  const dueDay = dayOfMonth(payload.dueDay, 20);
+  const note = String(payload.note || "").trim().slice(0, 500);
+  if (!name || creditLimit === null || currentBalance === null || minimumPayment === null || annualInterestRate === null) {
+    throw requestError("Completa los datos válidos de la tarjeta.");
+  }
+  if (creditLimit > 0 && currentBalance > creditLimit) throw requestError("El saldo utilizado no puede superar el límite de la tarjeta.");
+  return { name, institutionName, currencyCode, creditLimit, currentBalance, statementDay, dueDay, minimumPayment, annualInterestRate, note };
+}
+
+export async function createCreditCard(database, userId, payload) {
+  const settings = await userFinanceSettings(database, userId);
+  const card = creditCardPayload(payload, settings.currencyCode);
+  await database.run(
+    `INSERT INTO credit_cards
+      (user_id, name, institution_name, currency_code, credit_limit, current_balance, statement_day, due_day, minimum_payment, annual_interest_rate, note, is_active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    [userId, card.name, card.institutionName, card.currencyCode, card.creditLimit, card.currentBalance, card.statementDay, card.dueDay, card.minimumPayment, card.annualInterestRate, card.note],
+  );
+}
+
+export async function updateCreditCard(database, userId, payload) {
+  const cardId = integerId(payload.cardId);
+  if (!cardId || !(await creditCardById(database, cardId, userId))) throw requestError("La tarjeta no existe.", 404);
+  const settings = await userFinanceSettings(database, userId);
+  const card = creditCardPayload(payload, settings.currencyCode);
+  await database.run(
+    `UPDATE credit_cards SET name = ?, institution_name = ?, currency_code = ?, credit_limit = ?, current_balance = ?,
+      statement_day = ?, due_day = ?, minimum_payment = ?, annual_interest_rate = ?, note = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND user_id = ?`,
+    [card.name, card.institutionName, card.currencyCode, card.creditLimit, card.currentBalance, card.statementDay, card.dueDay, card.minimumPayment, card.annualInterestRate, card.note, cardId, userId],
+  );
+}
+
+export async function deleteCreditCard(database, userId, payload) {
+  const cardId = integerId(payload.cardId);
+  if (!cardId || !(await creditCardById(database, cardId, userId))) throw requestError("La tarjeta no existe.", 404);
+  await database.run("UPDATE credit_cards SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?", [cardId, userId]);
+}
+
+function debtPayload(payload, fallbackCurrency = "DOP") {
+  const name = String(payload.name || "").trim().slice(0, 180);
+  const lender = String(payload.lender || "").trim().slice(0, 180);
+  const debtType = DEBT_TYPES.has(payload.debtType) ? payload.debtType : "personal";
+  const currencyCode = normalizeCurrency(payload.currencyCode, fallbackCurrency);
+  const originalAmount = amountInCents(payload.originalAmount);
+  const currentBalance = amountInCents(payload.currentBalance, true);
+  const regularPayment = amountInCents(payload.regularPayment, true);
+  const paymentFrequency = recurringFrequency(payload.paymentFrequency);
+  const annualInterestRate = percentageNumber(payload.annualInterestRate);
+  const nextDueDate = payload.nextDueDate ? validDate(payload.nextDueDate) : null;
+  const endDate = payload.endDate ? validDate(payload.endDate) : null;
+  const note = String(payload.note || "").trim().slice(0, 500);
+  if (!name || !originalAmount || currentBalance === null || regularPayment === null || annualInterestRate === null) throw requestError("Completa los datos válidos de la deuda.");
+  if (currentBalance > originalAmount) throw requestError("El saldo pendiente no puede superar el monto original.");
+  return { name, lender, debtType, currencyCode, originalAmount, currentBalance, regularPayment, paymentFrequency, annualInterestRate, nextDueDate, endDate, note };
+}
+
+async function debtById(database, debtId, userId) {
+  return database.get(
+    `SELECT id, name, lender, debt_type AS debtType, currency_code AS currencyCode, original_amount AS originalAmount,
+      current_balance AS currentBalance, regular_payment AS regularPayment, payment_frequency AS paymentFrequency,
+      annual_interest_rate AS annualInterestRate, next_due_date AS nextDueDate, end_date AS endDate, COALESCE(note, '') AS note
+     FROM debts WHERE id = ? AND user_id = ? AND COALESCE(is_active, 1) = 1`,
+    [debtId, userId],
+  );
+}
+
+export async function createDebt(database, userId, payload) {
+  const settings = await userFinanceSettings(database, userId);
+  const debt = debtPayload(payload, settings.currencyCode);
+  await database.run(
+    `INSERT INTO debts
+      (user_id, name, lender, debt_type, currency_code, original_amount, current_balance, regular_payment, payment_frequency, annual_interest_rate, next_due_date, end_date, note, is_active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    [userId, debt.name, debt.lender, debt.debtType, debt.currencyCode, debt.originalAmount, debt.currentBalance, debt.regularPayment, debt.paymentFrequency, debt.annualInterestRate, debt.nextDueDate, debt.endDate, debt.note],
+  );
+}
+
+export async function updateDebt(database, userId, payload) {
+  const debtId = integerId(payload.debtId);
+  if (!debtId || !(await debtById(database, debtId, userId))) throw requestError("La deuda no existe.", 404);
+  const settings = await userFinanceSettings(database, userId);
+  const debt = debtPayload(payload, settings.currencyCode);
+  await database.run(
+    `UPDATE debts SET name = ?, lender = ?, debt_type = ?, currency_code = ?, original_amount = ?, current_balance = ?,
+      regular_payment = ?, payment_frequency = ?, annual_interest_rate = ?, next_due_date = ?, end_date = ?, note = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND user_id = ?`,
+    [debt.name, debt.lender, debt.debtType, debt.currencyCode, debt.originalAmount, debt.currentBalance, debt.regularPayment, debt.paymentFrequency, debt.annualInterestRate, debt.nextDueDate, debt.endDate, debt.note, debtId, userId],
+  );
+}
+
+export async function deleteDebt(database, userId, payload) {
+  const debtId = integerId(payload.debtId);
+  if (!debtId || !(await debtById(database, debtId, userId))) throw requestError("La deuda no existe.", 404);
+  await database.run("UPDATE debts SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?", [debtId, userId]);
+}
+
+async function payLiability(database, userId, payload, liabilityType) {
+  const id = integerId(liabilityType === "card" ? payload.cardId : payload.debtId);
+  const sourceAccountId = integerId(payload.accountId);
+  const amount = amountInCents(payload.amount);
+  const paymentDate = validDate(payload.paymentDate);
+  if (!id || !sourceAccountId || !amount) throw requestError("Selecciona una cuenta y un monto válido.");
+
+  await runInTransaction(database, async (transaction) => {
+    const liability = liabilityType === "card" ? await creditCardById(transaction, id, userId) : await debtById(transaction, id, userId);
+    const account = await accountById(transaction, sourceAccountId, userId);
+    if (!liability || !account) throw requestError("La deuda o cuenta seleccionada ya no está disponible.", 404);
+    if (String(account.currencyCode || "").toUpperCase() !== String(liability.currencyCode || "").toUpperCase()) throw requestError("Para registrar el pago, la cuenta y la deuda deben usar la misma moneda.");
+    if (Number(account.balance) < amount) throw requestError("La cuenta seleccionada no tiene saldo suficiente.");
+    const balance = Number(liabilityType === "card" ? liability.currentBalance : liability.currentBalance);
+    if (amount > balance) throw requestError("El pago no puede superar el saldo pendiente.");
+
+    await transaction.run("UPDATE accounts SET balance = balance - ? WHERE id = ? AND user_id = ?", [amount, sourceAccountId, userId]);
+    if (liabilityType === "card") {
+      await transaction.run("UPDATE credit_cards SET current_balance = current_balance - ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?", [amount, id, userId]);
+    } else {
+      let nextDueDate = liability.nextDueDate ? validDate(String(liability.nextDueDate)) : null;
+      if (nextDueDate) nextDueDate = advanceRecurringDate(nextDueDate, liability.paymentFrequency || "monthly");
+      await transaction.run("UPDATE debts SET current_balance = current_balance - ?, next_due_date = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?", [amount, nextDueDate, id, userId]);
+    }
+    await transaction.run(
+      `INSERT INTO liability_payments (user_id, liability_type, liability_id, source_account_id, amount, payment_date, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [userId, liabilityType, id, sourceAccountId, amount, paymentDate, String(payload.note || "").trim().slice(0, 500)],
+    );
+  });
+}
+
+export async function payCreditCard(database, userId, payload) { return payLiability(database, userId, payload, "card"); }
+export async function payDebt(database, userId, payload) { return payLiability(database, userId, payload, "debt"); }
+
+export async function restoreSystemCategories(database, userId) {
+  await database.run("DELETE FROM user_hidden_categories WHERE user_id = ?", [userId]);
+}
+
+
+export async function createCreditCardConsumption(database, userId, payload) {
+  const cardId = integerId(payload.cardId);
+  const categoryId = integerId(payload.categoryId);
+  const amount = amountInCents(payload.amount);
+  const description = String(payload.description || "").trim().slice(0, 255);
+  const purchaseDate = validDate(payload.purchaseDate);
+  const installments = Math.max(1, Math.min(Number.parseInt(payload.installments || "1", 10) || 1, 120));
+  const note = String(payload.note || "").trim().slice(0, 500);
+  if (!cardId || !categoryId || !amount || !description) throw requestError("Completa tarjeta, concepto, categoría y monto del consumo.");
+
+  await runInTransaction(database, async (transaction) => {
+    const card = await creditCardById(transaction, cardId, userId);
+    const category = await categoryById(transaction, categoryId, userId);
+    if (!card || !category) throw requestError("La tarjeta o categoría seleccionada no está disponible.", 404);
+    const nextBalance = Number(card.currentBalance || 0) + amount;
+    if (Number(card.creditLimit || 0) > 0 && nextBalance > Number(card.creditLimit)) throw requestError("El consumo supera el límite disponible de la tarjeta.");
+    await transaction.run("UPDATE credit_cards SET current_balance = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?", [nextBalance, cardId, userId]);
+    await transaction.run(
+      `INSERT INTO credit_card_consumptions (user_id, card_id, description, amount, category_id, purchase_date, installments, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, cardId, description, amount, categoryId, purchaseDate, installments, note],
+    );
+  });
 }

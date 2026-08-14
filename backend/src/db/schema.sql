@@ -128,6 +128,78 @@ CREATE TABLE IF NOT EXISTS recurring_payments (
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+
+CREATE TABLE IF NOT EXISTS user_hidden_categories (
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+  hidden_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, category_id)
+);
+
+CREATE TABLE IF NOT EXISTS credit_cards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  institution_name TEXT NOT NULL DEFAULT '',
+  currency_code TEXT NOT NULL DEFAULT 'DOP',
+  credit_limit INTEGER NOT NULL DEFAULT 0 CHECK (credit_limit >= 0),
+  current_balance INTEGER NOT NULL DEFAULT 0 CHECK (current_balance >= 0),
+  statement_day INTEGER NOT NULL DEFAULT 1,
+  due_day INTEGER NOT NULL DEFAULT 20,
+  minimum_payment INTEGER NOT NULL DEFAULT 0 CHECK (minimum_payment >= 0),
+  annual_interest_rate REAL NOT NULL DEFAULT 0,
+  note TEXT NOT NULL DEFAULT '',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS debts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  lender TEXT NOT NULL DEFAULT '',
+  debt_type TEXT NOT NULL DEFAULT 'personal',
+  currency_code TEXT NOT NULL DEFAULT 'DOP',
+  original_amount INTEGER NOT NULL CHECK (original_amount > 0),
+  current_balance INTEGER NOT NULL CHECK (current_balance >= 0),
+  regular_payment INTEGER NOT NULL DEFAULT 0 CHECK (regular_payment >= 0),
+  payment_frequency TEXT NOT NULL DEFAULT 'monthly',
+  annual_interest_rate REAL NOT NULL DEFAULT 0,
+  next_due_date TEXT,
+  end_date TEXT,
+  note TEXT NOT NULL DEFAULT '',
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+
+CREATE TABLE IF NOT EXISTS credit_card_consumptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  card_id INTEGER NOT NULL REFERENCES credit_cards(id),
+  description TEXT NOT NULL,
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  category_id INTEGER NOT NULL REFERENCES categories(id),
+  purchase_date TEXT NOT NULL,
+  installments INTEGER NOT NULL DEFAULT 1,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS liability_payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  liability_type TEXT NOT NULL CHECK (liability_type IN ('card','debt')),
+  liability_id INTEGER NOT NULL,
+  source_account_id INTEGER NOT NULL REFERENCES accounts(id),
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  payment_date TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS transactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -172,6 +244,14 @@ CREATE INDEX IF NOT EXISTS idx_transactions_category_date ON transactions(catego
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expiration ON sessions(expires_at);
 
+
+CREATE INDEX IF NOT EXISTS idx_hidden_categories_user ON user_hidden_categories(user_id);
+CREATE INDEX IF NOT EXISTS idx_credit_cards_user_active ON credit_cards(user_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_debts_user_active_due ON debts(user_id, is_active, next_due_date);
+CREATE INDEX IF NOT EXISTS idx_liability_payments_user ON liability_payments(user_id, liability_type, liability_id);
+
 PRAGMA optimize;
 
 CREATE INDEX IF NOT EXISTS idx_recurring_user_due ON recurring_payments(user_id, is_active, next_due_date);
+
+CREATE INDEX IF NOT EXISTS idx_card_consumptions_user_date ON credit_card_consumptions(user_id, purchase_date);
