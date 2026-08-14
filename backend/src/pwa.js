@@ -1,4 +1,4 @@
-import * as webpush from "web-push";
+import webpush from "web-push";
 
 let vapidConfigured = false;
 
@@ -8,9 +8,14 @@ function configureVapid() {
   const privateKey = String(process.env.VAPID_PRIVATE_KEY || "").trim();
   const subject = String(process.env.VAPID_SUBJECT || "mailto:soporte@codex413.com").trim();
   if (!publicKey || !privateKey) return false;
-  webpush.setVapidDetails(subject, publicKey, privateKey);
-  vapidConfigured = true;
-  return true;
+  try {
+    webpush.setVapidDetails(subject, publicKey, privateKey);
+    vapidConfigured = true;
+    return true;
+  } catch (error) {
+    console.error("Clara Push VAPID:", error?.message || error);
+    return false;
+  }
 }
 
 function normalizedSubscription(payload = {}) {
