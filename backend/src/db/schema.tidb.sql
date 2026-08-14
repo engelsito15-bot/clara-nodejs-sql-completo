@@ -122,6 +122,32 @@ CREATE TABLE IF NOT EXISTS period_budgets (
   CONSTRAINT fk_period_budgets_category FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
 );
 
+
+CREATE TABLE IF NOT EXISTS recurring_payments (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  name VARCHAR(180) NOT NULL,
+  amount BIGINT NOT NULL,
+  category_id BIGINT NOT NULL,
+  account_id BIGINT NOT NULL,
+  frequency VARCHAR(20) NOT NULL DEFAULT 'monthly',
+  next_due_date DATE NOT NULL,
+  due_day INT NULL,
+  due_month INT NULL,
+  is_mandatory TINYINT(1) NOT NULL DEFAULT 1,
+  auto_create_transaction TINYINT(1) NOT NULL DEFAULT 0,
+  note VARCHAR(500) NOT NULL DEFAULT '',
+  last_paid_date DATE NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT chk_recurring_amount CHECK (amount > 0),
+  CONSTRAINT chk_recurring_frequency CHECK (frequency IN ('weekly', 'biweekly', 'monthly', 'yearly')),
+  CONSTRAINT fk_recurring_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_recurring_category FOREIGN KEY (category_id) REFERENCES categories(id),
+  CONSTRAINT fk_recurring_account FOREIGN KEY (account_id) REFERENCES accounts(id)
+);
+
 CREATE TABLE IF NOT EXISTS transactions (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
   user_id BIGINT NOT NULL,
@@ -174,3 +200,5 @@ CREATE INDEX IF NOT EXISTS idx_transactions_account_date ON transactions(account
 CREATE INDEX IF NOT EXISTS idx_transactions_category_date ON transactions(category_id, transaction_date);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expiration ON sessions(expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_recurring_user_due ON recurring_payments(user_id, is_active, next_due_date);

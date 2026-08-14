@@ -102,6 +102,25 @@ function ensureSqliteMultiUserSchema(database) {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (user_id, category_id, period_key)
     );
+    CREATE TABLE IF NOT EXISTS recurring_payments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      amount INTEGER NOT NULL CHECK (amount > 0),
+      category_id INTEGER NOT NULL REFERENCES categories(id),
+      account_id INTEGER NOT NULL REFERENCES accounts(id),
+      frequency TEXT NOT NULL DEFAULT 'monthly' CHECK (frequency IN ('weekly', 'biweekly', 'monthly', 'yearly')),
+      next_due_date TEXT NOT NULL,
+      due_day INTEGER,
+      due_month INTEGER,
+      is_mandatory INTEGER NOT NULL DEFAULT 1,
+      auto_create_transaction INTEGER NOT NULL DEFAULT 0,
+      note TEXT NOT NULL DEFAULT '',
+      last_paid_date TEXT,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE TABLE IF NOT EXISTS account_balance_adjustments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -121,6 +140,7 @@ function ensureSqliteMultiUserSchema(database) {
     CREATE INDEX IF NOT EXISTS idx_goals_user_due_date ON goals(user_id, due_date);
     CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets(user_id);
     CREATE INDEX IF NOT EXISTS idx_period_budgets_user_period ON period_budgets(user_id, period_key);
+    CREATE INDEX IF NOT EXISTS idx_recurring_user_due ON recurring_payments(user_id, is_active, next_due_date);
     CREATE INDEX IF NOT EXISTS idx_adjustments_user_account ON account_balance_adjustments(user_id, account_id);
     CREATE INDEX IF NOT EXISTS idx_categories_user_active ON categories(user_id, is_active);
     CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id);
@@ -367,6 +387,31 @@ async function ensureTidbMultiUserSchema(connection) {
     CONSTRAINT fk_period_budgets_category FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE CASCADE
   )`);
 
+  await connection.query(`CREATE TABLE IF NOT EXISTS recurring_payments (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id BIGINT NOT NULL,
+    name VARCHAR(180) NOT NULL,
+    amount BIGINT NOT NULL,
+    category_id BIGINT NOT NULL,
+    account_id BIGINT NOT NULL,
+    frequency VARCHAR(20) NOT NULL DEFAULT 'monthly',
+    next_due_date DATE NOT NULL,
+    due_day INT NULL,
+    due_month INT NULL,
+    is_mandatory TINYINT(1) NOT NULL DEFAULT 1,
+    auto_create_transaction TINYINT(1) NOT NULL DEFAULT 0,
+    note VARCHAR(500) NOT NULL DEFAULT '',
+    last_paid_date DATE NULL,
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT chk_recurring_amount CHECK (amount > 0),
+    CONSTRAINT chk_recurring_frequency CHECK (frequency IN ('weekly', 'biweekly', 'monthly', 'yearly')),
+    CONSTRAINT fk_recurring_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_recurring_category FOREIGN KEY (category_id) REFERENCES categories(id),
+    CONSTRAINT fk_recurring_account FOREIGN KEY (account_id) REFERENCES accounts(id)
+  )`);
+
   await connection.query(`CREATE TABLE IF NOT EXISTS account_balance_adjustments (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     user_id BIGINT NOT NULL,
@@ -420,6 +465,7 @@ async function ensureTidbMultiUserSchema(connection) {
     "CREATE INDEX IF NOT EXISTS idx_goals_user_due_date ON goals(user_id, due_date)",
     "CREATE INDEX IF NOT EXISTS idx_budgets_user ON budgets(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_period_budgets_user_period ON period_budgets(user_id, period_key)",
+    "CREATE INDEX IF NOT EXISTS idx_recurring_user_due ON recurring_payments(user_id, is_active, next_due_date)",
     "CREATE INDEX IF NOT EXISTS idx_adjustments_user_account ON account_balance_adjustments(user_id, account_id)",
     "CREATE INDEX IF NOT EXISTS idx_categories_user_active ON categories(user_id, is_active)",
     "CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id)",

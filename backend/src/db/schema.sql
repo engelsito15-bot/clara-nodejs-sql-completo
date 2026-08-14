@@ -107,6 +107,27 @@ CREATE TABLE IF NOT EXISTS period_budgets (
   PRIMARY KEY (user_id, category_id, period_key)
 );
 
+
+CREATE TABLE IF NOT EXISTS recurring_payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  category_id INTEGER NOT NULL REFERENCES categories(id),
+  account_id INTEGER NOT NULL REFERENCES accounts(id),
+  frequency TEXT NOT NULL DEFAULT 'monthly' CHECK (frequency IN ('weekly', 'biweekly', 'monthly', 'yearly')),
+  next_due_date TEXT NOT NULL,
+  due_day INTEGER,
+  due_month INTEGER,
+  is_mandatory INTEGER NOT NULL DEFAULT 1,
+  auto_create_transaction INTEGER NOT NULL DEFAULT 0,
+  note TEXT NOT NULL DEFAULT '',
+  last_paid_date TEXT,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS transactions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -152,3 +173,5 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expiration ON sessions(expires_at);
 
 PRAGMA optimize;
+
+CREATE INDEX IF NOT EXISTS idx_recurring_user_due ON recurring_payments(user_id, is_active, next_due_date);

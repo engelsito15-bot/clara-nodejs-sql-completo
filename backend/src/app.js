@@ -21,7 +21,12 @@ import {
   createTransaction as engineCreateTransaction,
   createTransfer as engineCreateTransfer,
   updateBudget as engineUpdateBudget,
+  deleteBudgetForPeriod as engineDeleteBudgetForPeriod,
   copyPreviousBudget as engineCopyPreviousBudget,
+  createRecurringPayment as engineCreateRecurringPayment,
+  updateRecurringPayment as engineUpdateRecurringPayment,
+  deleteRecurringPayment as engineDeleteRecurringPayment,
+  markRecurringPaymentPaid as engineMarkRecurringPaymentPaid,
   createGoal as engineCreateGoal,
   contributeToGoal as engineContributeToGoal,
   createAccount as engineCreateAccount,
@@ -486,8 +491,23 @@ export function createApp({ databasePath } = {}) {
         case "budget":
           await engineUpdateBudget(database, userId, payload);
           break;
+        case "budget-delete":
+          await engineDeleteBudgetForPeriod(database, userId, payload);
+          break;
         case "budget-copy":
           await engineCopyPreviousBudget(database, userId);
+          break;
+        case "recurring":
+          await engineCreateRecurringPayment(database, userId, payload);
+          break;
+        case "recurring-update":
+          await engineUpdateRecurringPayment(database, userId, payload);
+          break;
+        case "recurring-delete":
+          await engineDeleteRecurringPayment(database, userId, payload);
+          break;
+        case "recurring-paid":
+          await engineMarkRecurringPaymentPaid(database, userId, payload);
           break;
         case "goal":
           await engineCreateGoal(database, userId, payload);
@@ -516,7 +536,7 @@ export function createApp({ databasePath } = {}) {
         default:
           throw requestError("Operación no reconocida.");
       }
-      const successStatus = ["account-update", "category-update"].includes(payload.action) ? 200 : 201;
+      const successStatus = ["account-update", "category-update", "recurring-update", "recurring-paid", "budget-delete", "recurring-delete"].includes(payload.action) ? 200 : 201;
       response.status(successStatus).json({ data: await getFinanceData(database, userId) });
     } catch (error) {
       next(error);

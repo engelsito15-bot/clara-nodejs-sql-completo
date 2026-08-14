@@ -7,6 +7,7 @@ const CURRENCY_CODES = new Set(["DOP", "USD", "EUR", "GBP", "MXN", "COP", "PEN",
 const SOURCE_TYPES = new Set(["MANUAL", "ASSISTANT", "EMAIL", "IMPORT", "BANK_API"]);
 const CATEGORY_COLORS = new Set(["forest", "coral", "sky", "lilac", "sun", "mint"]);
 const BUDGET_KINDS = new Set(["fixed", "flexible", "savings"]);
+const RECURRING_FREQUENCIES = new Set(["weekly", "biweekly", "monthly", "yearly"]);
 
 function requestError(message, status = 400) {
   const error = new Error(message);
@@ -28,6 +29,52 @@ function integerId(value) {
 function validDate(value) {
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
   return new Date().toISOString().slice(0, 10);
+}
+
+
+function booleanFlag(value) {
+  return ["1", "true", "on", "yes"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+function recurringFrequency(value) {
+  const frequency = String(value || "monthly").trim().toLowerCase();
+  return RECURRING_FREQUENCIES.has(frequency) ? frequency : "monthly";
+}
+
+function dateParts(value) {
+  const [year, month, day] = String(value || "").split("-").map(Number);
+  return { year, month, day };
+}
+
+function isoFromParts(year, month, day) {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function daysInMonth(year, month) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
+}
+
+function advanceRecurringDate(dateText, frequency, dueDay = null, dueMonth = null) {
+  const { year, month, day } = dateParts(dateText);
+  if (!year || !month || !day) return validDate();
+  const normalized = recurringFrequency(frequency);
+  if (normalized === "weekly" || normalized === "biweekly") {
+    const date = new Date(Date.UTC(year, month - 1, day));
+    date.setUTCDate(date.getUTCDate() + (normalized === "weekly" ? 7 : 14));
+    return date.toISOString().slice(0, 10);
+  }
+  if (normalized === "yearly") {
+    const targetYear = year + 1;
+    const targetMonth = Number(dueMonth) >= 1 && Number(dueMonth) <= 12 ? Number(dueMonth) : month;
+    const desiredDay = Number(dueDay) >= 1 ? Number(dueDay) : day;
+    return isoFromParts(targetYear, targetMonth, Math.min(desiredDay, daysInMonth(targetYear, targetMonth)));
+  }
+  const currentIndex = year * 12 + (month - 1);
+  const nextIndex = currentIndex + 1;
+  const targetYear = Math.floor(nextIndex / 12);
+  const targetMonth = (nextIndex % 12) + 1;
+  const desiredDay = Number(dueDay) >= 1 ? Number(dueDay) : day;
+  return isoFromParts(targetYear, targetMonth, Math.min(desiredDay, daysInMonth(targetYear, targetMonth)));
 }
 
 function normalizeCurrency(value, fallback = "DOP") {
@@ -379,6 +426,167 @@ export async function copyPreviousBudget(database, userId) {
       );
     }
   }
+}
+
+
+export async function deleteBudgetForPeriod(database, userId, payload) {
+  const categoryId = integerId(payload.categoryId);
+  if (!categoryId) throw requestError("Selecciona un sobre válido.");
+  const category = await categoryById(database, categoryId, userId);
+  if (!category) throw requestError("La categoría no existe.", 404);
+  const settings = await userFinanceSettings(database, userId);
+  const periodKey = periodKeyForDate(validDate(), settings.planningPeriod);
+  const existing = await database.get(
+    "SELECT user_id FROM period_budgets WHERE user_id = ? AND category_id = ? AND period_key = ?",
+    [userId, categoryId, periodKey],
+  );
+  if (existing) {
+    await database.run(
+      `UPDATE period_budgets
+          SET limit_amount = 0, budget_kind = 'flexible', note = '', updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ? AND category_id = ? AND period_key = ?`,
+      [userId, categoryId, periodKey],
+    );
+  } else {
+    await database.run(
+      `INSERT INTO period_budgets (user_id, category_id, period_key, limit_amount, budget_kind, note)
+       VALUES (?, ?, ?, 0, 'flexible', '')`,
+      [userId, categoryId, periodKey],
+    );
+  }
+}
+
+async function recurringById(database, recurringId, userId, activeOnly = true) {
+  return database.get(
+    `SELECT rp.id, rp.name, rp.amount, rp.category_id AS categoryId, rp.account_id AS accountId,
+      rp.frequency, rp.next_due_date AS nextDueDate, rp.due_day AS dueDay, rp.due_month AS dueMonth,
+      COALESCE(rp.is_mandatory, 1) AS isMandatory,
+      COALESCE(rp.auto_create_transaction, 0) AS autoCreateTransaction,
+      COALESCE(rp.note, '') AS note, rp.last_paid_date AS lastPaidDate, COALESCE(rp.is_active, 1) AS isActive
+     FROM recurring_payments rp
+     WHERE rp.id = ? AND rp.user_id = ? ${activeOnly ? "AND COALESCE(rp.is_active, 1) = 1" : ""}`,
+    [recurringId, userId],
+  );
+}
+
+function recurringPayload(payload) {
+  const name = String(payload.name || "").trim().slice(0, 180);
+  const amount = amountInCents(payload.amount);
+  const categoryId = integerId(payload.categoryId);
+  const accountId = integerId(payload.accountId);
+  const frequency = recurringFrequency(payload.frequency);
+  const nextDueDate = validDate(payload.nextDueDate);
+  const { month, day } = dateParts(nextDueDate);
+  const note = String(payload.note || "").trim().slice(0, 500);
+  if (!name || !amount || !categoryId || !accountId) {
+    throw requestError("Completa el nombre, monto, categoría y cuenta del compromiso.");
+  }
+  return {
+    name, amount, categoryId, accountId, frequency, nextDueDate,
+    dueDay: day, dueMonth: month,
+    isMandatory: booleanFlag(payload.isMandatory),
+    autoCreateTransaction: booleanFlag(payload.autoCreateTransaction),
+    note,
+  };
+}
+
+export async function createRecurringPayment(database, userId, payload) {
+  const item = recurringPayload(payload);
+  const account = await accountById(database, item.accountId, userId);
+  const category = await categoryById(database, item.categoryId, userId);
+  if (!account) throw requestError("La cuenta seleccionada no existe.", 404);
+  if (!category) throw requestError("La categoría seleccionada no existe.", 404);
+  await database.run(
+    `INSERT INTO recurring_payments
+      (user_id, name, amount, category_id, account_id, frequency, next_due_date, due_day, due_month,
+       is_mandatory, auto_create_transaction, note, is_active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    [userId, item.name, item.amount, item.categoryId, item.accountId, item.frequency, item.nextDueDate, item.dueDay, item.dueMonth,
+      item.isMandatory ? 1 : 0, item.autoCreateTransaction ? 1 : 0, item.note],
+  );
+}
+
+export async function updateRecurringPayment(database, userId, payload) {
+  const recurringId = integerId(payload.recurringId);
+  if (!recurringId) throw requestError("Selecciona un compromiso válido.");
+  const existing = await recurringById(database, recurringId, userId);
+  if (!existing) throw requestError("El compromiso no existe.", 404);
+  const item = recurringPayload(payload);
+  const account = await accountById(database, item.accountId, userId);
+  const category = await categoryById(database, item.categoryId, userId);
+  if (!account || !category) throw requestError("La cuenta o categoría seleccionada ya no está disponible.", 404);
+  await database.run(
+    `UPDATE recurring_payments
+        SET name = ?, amount = ?, category_id = ?, account_id = ?, frequency = ?, next_due_date = ?,
+            due_day = ?, due_month = ?, is_mandatory = ?, auto_create_transaction = ?, note = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND user_id = ?`,
+    [item.name, item.amount, item.categoryId, item.accountId, item.frequency, item.nextDueDate, item.dueDay, item.dueMonth,
+      item.isMandatory ? 1 : 0, item.autoCreateTransaction ? 1 : 0, item.note, recurringId, userId],
+  );
+}
+
+export async function deleteRecurringPayment(database, userId, payload) {
+  const recurringId = integerId(payload.recurringId);
+  if (!recurringId) throw requestError("Selecciona un compromiso válido.");
+  const existing = await recurringById(database, recurringId, userId);
+  if (!existing) throw requestError("El compromiso no existe.", 404);
+  await database.run(
+    "UPDATE recurring_payments SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
+    [recurringId, userId],
+  );
+}
+
+export async function markRecurringPaymentPaid(database, userId, payload) {
+  const recurringId = integerId(payload.recurringId);
+  if (!recurringId) throw requestError("Selecciona un compromiso válido.");
+  const paidDate = validDate(payload.paidDate);
+  const registerExpenseOverride = payload.registerExpense === undefined ? null : booleanFlag(payload.registerExpense);
+  const settings = await userFinanceSettings(database, userId);
+
+  await runInTransaction(database, async (transaction) => {
+    const recurring = await recurringById(transaction, recurringId, userId);
+    if (!recurring) throw requestError("El compromiso no existe.", 404);
+    const account = await accountById(transaction, Number(recurring.accountId), userId);
+    const category = await categoryById(transaction, Number(recurring.categoryId), userId);
+    if (!account || !category) throw requestError("La cuenta o categoría del compromiso ya no está disponible.", 404);
+
+    const shouldRegisterExpense = registerExpenseOverride === null
+      ? Boolean(Number(recurring.autoCreateTransaction || 0))
+      : registerExpenseOverride;
+    const dueDate = validDate(String(recurring.nextDueDate));
+    const externalRef = `recurring:${recurringId}:${dueDate}`;
+
+    if (shouldRegisterExpense) {
+      const duplicate = await transaction.get(
+        "SELECT id FROM transactions WHERE user_id = ? AND external_ref = ? LIMIT 1",
+        [userId, externalRef],
+      );
+      if (!duplicate) {
+        const amount = Number(recurring.amount || 0);
+        if (Number(account.balance) < amount) throw requestError("La cuenta seleccionada no tiene saldo suficiente para registrar este pago.");
+        const balanceAfter = Number(account.balance) - amount;
+        const currencyCode = normalizeCurrency(account.currencyCode, settings.currencyCode);
+        await transaction.run("UPDATE accounts SET balance = ? WHERE id = ? AND user_id = ?", [balanceAfter, account.id, userId]);
+        await transaction.run(
+          `INSERT INTO transactions
+            (user_id, type, description, amount, account_id, category_id, transaction_date, note,
+             source, currency_code, balance_after, period_key, external_ref)
+           VALUES (?, 'expense', ?, ?, ?, ?, ?, ?, 'MANUAL', ?, ?, ?, ?)`,
+          [userId, recurring.name, amount, account.id, recurring.categoryId, paidDate,
+            recurring.note ? `Pago recurrente · ${recurring.note}` : "Pago recurrente",
+            currencyCode, balanceAfter, periodKeyForDate(paidDate, settings.planningPeriod), externalRef],
+        );
+      }
+    }
+
+    const nextDueDate = advanceRecurringDate(dueDate, recurring.frequency, recurring.dueDay, recurring.dueMonth);
+    await transaction.run(
+      `UPDATE recurring_payments
+          SET last_paid_date = ?, next_due_date = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?`,
+      [paidDate, nextDueDate, recurringId, userId],
+    );
+  });
 }
 
 export async function createGoal(database, userId, payload) {

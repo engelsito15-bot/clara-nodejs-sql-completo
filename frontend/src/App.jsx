@@ -8,6 +8,8 @@ const EMPTY_DATA = {
   adjustments: [],
   balanceHistory: [],
   goals: [],
+  recurringPayments: [],
+  calendar: { monthStart: "", monthEnd: "", events: [], upcoming: [], overdue: [], windows: { days7: { count: 0, total: 0 }, days15: { count: 0, total: 0 }, days30: { count: 0, total: 0 } } },
   budgetPlan: {
     periodKey: "",
     assigned: 0,
@@ -18,6 +20,8 @@ const EMPTY_DATA = {
     incomeReference: 0,
     liquidBalance: 0,
     fixedReserve: 0,
+    recurringReserve: 0,
+    protectedCommitments: 0,
     savingsReserve: 0,
     safeToSpend: 0,
     dailySafeToSpend: 0,
@@ -56,6 +60,8 @@ const EMPTY_DATA = {
     safeToSpend: 0,
     dailySafeToSpend: 0,
     fixedReserve: 0,
+    recurringReserve: 0,
+    protectedCommitments: 0,
     savingsReserve: 0,
     liquidBalance: 0,
     budgetAlertCount: 0,
@@ -66,12 +72,13 @@ const navItems = [
   { id: "inicio", label: "Inicio", icon: "home" },
   { id: "movimientos", label: "Movimientos", icon: "activity" },
   { id: "presupuesto", label: "Presupuesto", icon: "budget" },
+  { id: "calendario", label: "Calendario", icon: "calendar" },
   { id: "categorias", label: "Categorías", icon: "tags" },
   { id: "metas", label: "Metas", icon: "target" },
   { id: "cuentas", label: "Cuentas", icon: "wallet" },
 ];
 
-const mobileNavItems = navItems.filter((item) => item.id !== "categorias");
+const mobileNavItems = navItems.filter((item) => ["inicio", "movimientos", "calendario", "presupuesto", "cuentas"].includes(item.id));
 
 const iconPaths = {
   home: ["M3 10.5 12 3l9 7.5", "M5 9.5V21h14V9.5", "M9 21v-7h6v7"],
@@ -110,6 +117,20 @@ const iconPaths = {
   tags: ["M20.6 13.6 11 4H4v7l9.6 9.6a2 2 0 0 0 2.8 0l4.2-4.2a2 2 0 0 0 0-2.8Z", "M7.5 7.5h.01"],
   history: ["M3 12a9 9 0 1 0 3-6.7", "M3 4v5h5", "M12 7v5l3 2"],
   layers: ["m12 2 9 5-9 5-9-5 9-5Z", "m3 12 9 5 9-5", "m3 17 9 5 9-5"],
+  utensils: ["M4 3v7", "M7 3v7", "M4 7h3", "M5.5 10v11", "M14 3v18", "M14 3c4 2 5 6 3 9h-3"],
+  car: ["M5 17h14", "M6 17l-1-5 2-5h10l2 5-1 5", "M7 12h10", "M8 18v2", "M16 18v2", "M8 15h.01", "M16 15h.01"],
+  heart: ["M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8Z"],
+  gamepad: ["M6 9h12a4 4 0 0 1 3.8 5.2l-1 3A2.5 2.5 0 0 1 16.6 18L15 16H9l-1.6 2a2.5 2.5 0 0 1-4.2-.8l-1-3A4 4 0 0 1 6 9Z", "M7 12v4", "M5 14h4", "M16 13h.01", "M19 15h.01"],
+  graduation: ["m3 10 9-5 9 5-9 5-9-5Z", "M7 12v5c3 2 7 2 10 0v-5", "M21 10v6"],
+  heartPulse: ["M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8L12 21l7.8-7.6a5.5 5.5 0 0 0 1-7.8Z", "M4.5 13h4l1.5-3 2.2 6 1.6-3H19"],
+  receipt: ["M6 3h12v18l-3-2-3 2-3-2-3 2V3Z", "M9 8h6", "M9 12h6", "M9 16h4"],
+  creditCard: ["M3 6h18v12H3z", "M3 10h18", "M7 15h3"],
+  shoppingBag: ["M5 8h14l-1 13H6L5 8Z", "M9 10V6a3 3 0 0 1 6 0v4"],
+  circleMore: ["M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z", "M8 12h.01", "M12 12h.01", "M16 12h.01"],
+  repeat: ["M17 2l4 4-4 4", "M3 11V9a3 3 0 0 1 3-3h15", "M7 22l-4-4 4-4", "M21 13v2a3 3 0 0 1-3 3H3"],
+  bell: ["M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9", "M10 21h4"],
+  checkCircle: ["M22 11.1V12a10 10 0 1 1-5.9-9.1", "m9 11 3 3L22 4"],
+  alertTriangle: ["M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z", "M12 9v4", "M12 17h.01"],
 };
 
 function Icon({ name, size = 18, strokeWidth = 1.8, className = "" }) {
@@ -117,6 +138,16 @@ function Icon({ name, size = 18, strokeWidth = 1.8, className = "" }) {
   return <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     {paths.map((path, index) => <path d={path} key={`${name}-${index}`} />)}
   </svg>;
+}
+
+const systemCategoryIcons = {
+  1: "home", 2: "utensils", 3: "car", 4: "heart", 5: "gamepad", 6: "graduation",
+  7: "heartPulse", 8: "receipt", 9: "briefcase", 10: "creditCard", 11: "shoppingBag", 12: "circleMore",
+};
+
+function CategoryIcon({ category, size = 18 }) {
+  const rootId = Number(category?.parentId || category?.id || 0);
+  return <Icon name={systemCategoryIcons[rootId] || "tags"} size={size} strokeWidth={1.9} />;
 }
 
 function Brand({ compact = false }) {
@@ -823,7 +854,8 @@ function SavingsApp() {
       payload.goalId = modal.referenceId;
     } else {
       payload.action = modal.kind;
-      if (modal.kind === "budget") payload.categoryId = modal.referenceId;
+      if (modal.kind === "budget" || modal.kind === "budget-delete") payload.categoryId = modal.referenceId;
+      if (["recurring-update", "recurring-delete", "recurring-paid"].includes(modal.kind)) payload.recurringId = modal.referenceId;
       if (modal.kind === "account-update" || modal.kind === "account-delete") payload.accountId = modal.referenceId;
       if (modal.kind === "category" && modal.referenceId) payload.parentId = modal.referenceId;
       if (modal.kind === "category-update" || modal.kind === "category-delete") payload.categoryId = modal.referenceId;
@@ -1015,6 +1047,7 @@ function SavingsApp() {
           openModal={openModal}
         />}
         {activeView === "presupuesto" && <BudgetView data={data} openModal={openModal} goTo={setActiveView} />}
+        {activeView === "calendario" && <CalendarView data={data} openModal={openModal} />}
         {activeView === "categorias" && <CategoriesView data={data} openModal={openModal} />}
         {activeView === "metas" && <GoalsView data={data} openModal={openModal} />}
         {activeView === "cuentas" && <AccountsView data={data} openModal={openModal} showBalance={showBalance} />}
@@ -1054,6 +1087,7 @@ function viewTitle(view) {
     inicio: "Tu dinero, bien pensado.",
     movimientos: "Cada movimiento cuenta.",
     presupuesto: "Haz que cada monto tenga un propósito.",
+    calendario: "Anticípate a lo que viene.",
     categorias: "Ordena tu dinero a tu manera.",
     metas: "Ahorra con un destino.",
     cuentas: "Todo tu dinero, en orden.",
@@ -1251,7 +1285,7 @@ function BudgetView({ data, openModal, goTo }) {
         <div>
           <p className="eyebrow light">Dinero seguro para gastar</p>
           <h2>{money(plan.safeToSpend || 0)}</h2>
-          <p>Estimación disponible hasta {safeUntilLabel}, después de proteger compromisos fijos y tu reserva de ahorro configurada.</p>
+          <p>Estimación disponible hasta {safeUntilLabel}, después de proteger tus compromisos conocidos y la reserva de ahorro configurada.</p>
         </div>
       </div>
       <div className="safe-spend-daily">
@@ -1261,10 +1295,11 @@ function BudgetView({ data, openModal, goTo }) {
       </div>
       <div className="safe-spend-breakdown">
         <span><Icon name="wallet" size={15} /><small>Dinero líquido</small><strong>{money(plan.liquidBalance || 0)}</strong></span>
-        <span><Icon name="calendar" size={15} /><small>Compromisos protegidos</small><strong>{money(plan.fixedReserve || 0)}</strong></span>
+        <span><Icon name="calendar" size={15} /><small>Compromisos protegidos</small><strong>{money(plan.protectedCommitments || plan.fixedReserve || 0)}</strong></span>
         <span><Icon name="target" size={15} /><small>Reserva de ahorro</small><strong>{money(plan.savingsReserve || 0)}</strong></span>
       </div>
       {plan.usingProfileFixedFallback && <p className="safe-spend-note"><Icon name="info" size={14} /> Clara está usando los gastos fijos aproximados de tu perfil. Marca sobres como “Compromiso fijo” para que este cálculo sea más preciso.</p>}
+      {Number(plan.recurringReserve || 0) > 0 && <p className="safe-spend-note"><Icon name="repeat" size={14} /> Clara añadió {money(plan.recurringReserve)} de pagos recurrentes que todavía no estaban cubiertos por tus sobres fijos.</p>}
       <p className="safe-spend-disclaimer">Es una estimación basada en lo que has registrado en Clara; no incluye cargos o pagos que todavía no estén configurados.</p>
     </section>
 
@@ -1311,9 +1346,9 @@ function BudgetView({ data, openModal, goTo }) {
         {roots.map((category) => {
           const children = data.categories.filter((child) => child.parentId === category.id);
           return <div className="budget-envelope-group" key={category.id}>
-            <BudgetRow category={category} onEdit={() => openModal("budget", category.id)} />
+            <BudgetRow category={category} onEdit={() => openModal("budget", category.id)} onDelete={() => openModal("budget-delete", category.id)} />
             {children.length > 0 && <div className="budget-subenvelopes">
-              {children.map((child) => <BudgetRow key={child.id} category={child} compact onEdit={() => openModal("budget", child.id)} />)}
+              {children.map((child) => <BudgetRow key={child.id} category={child} compact onEdit={() => openModal("budget", child.id)} onDelete={() => openModal("budget-delete", child.id)} />)}
             </div>}
           </div>;
         })}
@@ -1321,6 +1356,118 @@ function BudgetView({ data, openModal, goTo }) {
       {!roots.length && <div className="empty-state"><span><Icon name="budget" size={24} /></span><h3>Crea tu primera categoría</h3><p>Después podrás asignarle un sobre para este período.</p></div>}
     </section>
   </>;
+}
+
+
+function CalendarView({ data, openModal }) {
+  const { money, moneyFor } = useMoney();
+  const calendar = data.calendar || EMPTY_DATA.calendar;
+  const recurring = data.recurringPayments || [];
+  const start = calendar.monthStart || `${todayIso().slice(0, 7)}-01`;
+  const end = calendar.monthEnd || start;
+  const startDate = new Date(`${start}T12:00:00`);
+  const endDate = new Date(`${end}T12:00:00`);
+  const firstOffset = (startDate.getDay() + 6) % 7;
+  const totalDays = endDate.getDate();
+  const cells = Array.from({ length: firstOffset + totalDays }, (_, index) => {
+    if (index < firstOffset) return null;
+    const day = index - firstOffset + 1;
+    return `${start.slice(0, 8)}${String(day).padStart(2, "0")}`;
+  });
+  while (cells.length % 7) cells.push(null);
+  const eventsByDate = new Map();
+  for (const event of calendar.events || []) {
+    if (!eventsByDate.has(event.date)) eventsByDate.set(event.date, []);
+    eventsByDate.get(event.date).push(event);
+  }
+  const monthLabel = new Intl.DateTimeFormat("es-DO", { month: "long", year: "numeric" }).format(startDate);
+  const today = todayIso();
+  const next = [...(calendar.overdue || []), ...(calendar.upcoming || [])][0] || null;
+
+  return <section className="calendar-page">
+    <div className="page-heading calendar-heading">
+      <div><p className="eyebrow">Calendario financiero</p><h2>Lo que viene, antes de que llegue</h2><p>Organiza cobros y compromisos recurrentes. Clara los usa para proteger mejor tu dinero disponible.</p></div>
+      <button className="primary-action" onClick={() => openModal("recurring")}><Icon name="plus" size={15} /> Nuevo compromiso</button>
+    </div>
+
+    <div className="calendar-kpis">
+      <article><span><Icon name="clock" size={18} /></span><small>Próximos 7 días</small><strong>{money(calendar.windows?.days7?.total || 0)}</strong><em>{calendar.windows?.days7?.count || 0} compromiso(s)</em></article>
+      <article><span><Icon name="calendar" size={18} /></span><small>Próximos 15 días</small><strong>{money(calendar.windows?.days15?.total || 0)}</strong><em>{calendar.windows?.days15?.count || 0} compromiso(s)</em></article>
+      <article><span><Icon name="repeat" size={18} /></span><small>Pagos activos</small><strong>{recurring.length}</strong><em>programados en Clara</em></article>
+      <article><span><Icon name="shield" size={18} /></span><small>Protegido hasta cobrar</small><strong>{money(data.budgetPlan?.protectedCommitments || 0)}</strong><em>fijos + recurrentes pendientes</em></article>
+    </div>
+
+    {(calendar.overdue || []).length > 0 && <div className="calendar-overdue-banner">
+      <span><Icon name="alertTriangle" size={19} /></span>
+      <div><strong>Tienes {calendar.overdue.length} compromiso(s) vencido(s)</strong><p>Márcalos como pagados o actualiza la fecha para que el cálculo de Clara vuelva a estar al día.</p></div>
+    </div>}
+
+    <div className="calendar-layout">
+      <article className="calendar-board page-card">
+        <div className="calendar-board-head"><div><p className="eyebrow">Vista mensual</p><h3>{monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1)}</h3></div><span className="calendar-legend"><i className="payday" /> Cobro <i className="commitment" /> Compromiso</span></div>
+        <div className="calendar-weekdays">{["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map((day) => <span key={day}>{day}</span>)}</div>
+        <div className="calendar-grid">
+          {cells.map((date, index) => {
+            if (!date) return <span className="calendar-day empty" key={`empty-${index}`} />;
+            const events = eventsByDate.get(date) || [];
+            return <div className={`calendar-day ${date === today ? "today" : ""}`} key={date}>
+              <span className="calendar-day-number">{Number(date.slice(8, 10))}</span>
+              <div className="calendar-day-events">
+                {events.slice(0, 3).map((event) => <button key={event.id} className={`calendar-event ${event.type} ${event.overdue ? "overdue" : ""}`} onClick={() => event.recurringId && openModal("recurring-update", event.recurringId)} title={event.title}>
+                  <i /> <span>{event.title}</span>
+                </button>)}
+                {events.length > 3 && <small>+{events.length - 3} más</small>}
+              </div>
+            </div>;
+          })}
+        </div>
+      </article>
+
+      <aside className="calendar-side">
+        <article className="page-card next-commitment-card">
+          <p className="eyebrow">Más próximo</p>
+          {next ? <>
+            <span className="next-commitment-icon"><Icon name={next.overdue ? "alertTriangle" : "bell"} size={22} /></span>
+            <h3>{next.name}</h3>
+            <strong>{moneyFor(next.amount, next.currencyCode)}</strong>
+            <p>{next.overdue ? `Venció el ${longDate(next.date)}` : `Programado para ${longDate(next.date)}`}</p>
+          </> : <><span className="next-commitment-icon"><Icon name="checkCircle" size={22} /></span><h3>Sin compromisos próximos</h3><p>Tu calendario está libre por ahora.</p></>}
+        </article>
+
+        <article className="page-card upcoming-list-card">
+          <div className="section-heading"><div><p className="eyebrow">Próximos 30 días</p><h3>Compromisos</h3></div></div>
+          <div className="upcoming-list">
+            {[...(calendar.overdue || []), ...(calendar.upcoming || [])].slice(0, 8).map((item, index) => <button key={`${item.id}-${item.date}-${index}`} onClick={() => openModal("recurring-update", item.id)}>
+              <span className={`upcoming-date ${item.overdue ? "overdue" : ""}`}><strong>{Number(item.date.slice(8, 10))}</strong><small>{new Intl.DateTimeFormat("es-DO", { month: "short" }).format(new Date(`${item.date}T12:00:00`)).replace(".", "")}</small></span>
+              <span><strong>{item.name}</strong><small>{item.categoryName || "Compromiso"} · {item.accountName || "Cuenta"}</small></span>
+              <b>{moneyFor(item.amount, item.currencyCode)}</b>
+            </button>)}
+            {!calendar.overdue?.length && !calendar.upcoming?.length && <div className="compact-empty"><Icon name="calendar" size={20} /><span>No hay pagos programados en los próximos 30 días.</span></div>}
+          </div>
+        </article>
+      </aside>
+    </div>
+
+    <section className="page-card recurring-section">
+      <div className="section-heading"><div><p className="eyebrow">Automatiza tu planificación</p><h2>Pagos recurrentes</h2><p>Alquiler, internet, universidad, seguros, suscripciones y cualquier compromiso que vuelva a repetirse.</p></div><button className="secondary-action" onClick={() => openModal("recurring")}><Icon name="plus" size={15} /> Añadir</button></div>
+      <div className="recurring-grid">
+        {recurring.map((item) => {
+          const category = data.categories.find((categoryItem) => categoryItem.id === item.categoryId) || { id: item.categoryId, parentId: item.parentCategoryId, color: item.categoryColor };
+          return <article className={`recurring-card ${item.nextDueDate < today ? "overdue" : ""}`} key={item.id}>
+            <div className="recurring-card-top">
+              <span className={`category-icon-tile ${item.categoryColor || "mint"}`}><CategoryIcon category={category} size={19} /></span>
+              <span><strong>{item.name}</strong><small>{item.frequencyLabel} · {item.categoryName}</small></span>
+              <div className="recurring-actions"><button onClick={() => openModal("recurring-update", item.id)} title="Editar"><Icon name="edit" size={14} /></button><button className="danger-icon" onClick={() => openModal("recurring-delete", item.id)} title="Eliminar"><Icon name="trash" size={14} /></button></div>
+            </div>
+            <div className="recurring-amount"><strong>{moneyFor(item.amount, item.currencyCode)}</strong><span>{item.isMandatory ? "Compromiso obligatorio" : "Pago flexible"}</span></div>
+            <div className="recurring-meta"><span><Icon name="calendar" size={13} /> {item.nextDueDate < today ? "Vencido" : "Próximo"}: {prettyDate(item.nextDueDate)}</span><span><Icon name="wallet" size={13} /> {item.accountName}</span></div>
+            <button className="recurring-paid-button" onClick={() => openModal("recurring-paid", item.id)}><Icon name="checkCircle" size={15} /> Marcar como pagado</button>
+          </article>;
+        })}
+        {!recurring.length && <button className="recurring-empty-card" onClick={() => openModal("recurring")}><span><Icon name="repeat" size={24} /></span><strong>Crea tu primer compromiso recurrente</strong><small>Clara podrá anticiparlo antes de decirte cuánto dinero es seguro gastar.</small></button>}
+      </div>
+    </section>
+  </section>;
 }
 
 function CategoriesView({ data, openModal }) {
@@ -1341,7 +1488,7 @@ function CategoriesView({ data, openModal }) {
         const children = data.categories.filter((child) => child.parentId === category.id);
         return <article className="category-group-card" key={category.id}>
           <div className="category-group-head">
-            <span className={`category-symbol ${category.color}`}>{category.symbol}</span>
+            <span className={`category-icon-tile ${category.color}`}><CategoryIcon category={category} size={19} /></span>
             <div><strong>{category.name}</strong><small>{category.isSystem ? "Categoría base de Clara" : "Categoría personalizada"}</small></div>
             <div className="category-actions">
               <button onClick={() => openModal("category", category.id)} title="Crear subcategoría"><Icon name="plus" size={14} /></button>
@@ -1437,7 +1584,7 @@ function AccountsView({ data, openModal, showBalance }) {
   </>;
 }
 
-function BudgetRow({ category, onEdit, compact = false }) {
+function BudgetRow({ category, onEdit, onDelete = null, compact = false }) {
   const { money } = useMoney();
   const limit = Number(category.periodLimit ?? category.monthlyLimit ?? 0);
   const spent = Number(category.spent || 0);
@@ -1447,9 +1594,12 @@ function BudgetRow({ category, onEdit, compact = false }) {
   const kindLabel = category.budgetKindLabel || (category.budgetKind === "fixed" ? "Compromiso fijo" : category.budgetKind === "savings" ? "Reserva de ahorro" : "Gasto flexible");
   return <article className={`${compact ? "budget-item compact" : "budget-item"} ${category.parentId ? "subcategory-budget" : ""} budget-${level}`}>
     <div className="budget-item-top">
-      <span className={`category-symbol ${category.color}`}>{category.symbol}</span>
+      <span className={`category-icon-tile ${category.color}`}><CategoryIcon category={category} size={compact ? 16 : 19} /></span>
       <span><strong>{category.parentId ? `${category.parentDisplayName || "Categoría"} › ${category.name}` : category.name}</strong><small>{limit > 0 ? `${money(remaining)} disponibles` : "Sin límite todavía"}</small></span>
-      <button onClick={onEdit} aria-label={`Ajustar presupuesto de ${category.name}`}>{compact ? <Icon name="edit" size={14} /> : <>Ajustar <Icon name="edit" size={13} /></>}</button>
+      <div className="budget-row-actions">
+        <button onClick={onEdit} aria-label={`Ajustar presupuesto de ${category.name}`} title="Ajustar"><Icon name="edit" size={14} /><span>{compact ? "" : "Ajustar"}</span></button>
+        {onDelete && limit > 0 && <button className="danger-icon" onClick={onDelete} aria-label={`Eliminar presupuesto de ${category.name}`} title="Eliminar sobre"><Icon name="trash" size={14} /><span>{compact ? "" : "Eliminar"}</span></button>}
+      </div>
     </div>
     <div className="budget-badges">
       {limit > 0 && <span className={`budget-kind ${category.budgetKind || "flexible"}`}>{kindLabel}</span>}
@@ -1683,18 +1833,51 @@ function TransactionFields({ kind, data }) {
   </>;
 }
 
+
+function RecurringFields({ data, item = null }) {
+  const { moneyFor } = useMoney();
+  const [accountId, setAccountId] = useState(String(item?.accountId || data.accounts[0]?.id || ""));
+  const account = data.accounts.find((accountItem) => String(accountItem.id) === accountId);
+  const roots = data.categories.filter((category) => !category.parentId);
+  return <>
+    <label><span>Nombre del compromiso</span><input name="name" required autoFocus maxLength="180" defaultValue={item?.name || ""} placeholder="Ej. Internet, alquiler, universidad" /></label>
+    <div className="form-grid">
+      <label><span>Monto</span><div className="money-field"><span>{currencyInfo(account?.currencyCode || "DOP").symbol}</span><input type="number" name="amount" min="0.01" step="0.01" required defaultValue={item ? (item.amount / 100).toFixed(2) : ""} placeholder="0.00" /></div></label>
+      <label><span>Frecuencia</span><select name="frequency" defaultValue={item?.frequency || "monthly"}><option value="weekly">Semanal</option><option value="biweekly">Cada 2 semanas</option><option value="monthly">Mensual</option><option value="yearly">Anual</option></select></label>
+    </div>
+    <label><span>Cuenta desde la que normalmente se paga</span><select name="accountId" required value={accountId} onChange={(event) => setAccountId(event.target.value)}>
+      {data.accounts.map((accountItem) => <option key={accountItem.id} value={accountItem.id}>{accountItem.name} — {moneyFor(accountItem.balance, accountItem.currencyCode)}</option>)}
+    </select></label>
+    <label><span>Categoría</span><select name="categoryId" required defaultValue={item?.categoryId || data.categories[0]?.id || ""}>
+      {roots.map((root) => <optgroup key={root.id} label={root.name}><option value={root.id}>{root.name}</option>{data.categories.filter((child) => child.parentId === root.id).map((child) => <option key={child.id} value={child.id}>↳ {child.name}</option>)}</optgroup>)}
+    </select></label>
+    <label><span>Próxima fecha</span><input type="date" name="nextDueDate" required defaultValue={item?.nextDueDate || todayIso()} /></label>
+    <label><span>Nota <small>opcional</small></span><input name="note" maxLength="500" defaultValue={item?.note || ""} placeholder="Ej. Se paga desde la app del proveedor" /></label>
+    <div className="recurring-options">
+      <label className="check-option"><input type="checkbox" name="isMandatory" defaultChecked={item ? item.isMandatory : true} /><span><strong>Es un compromiso obligatorio</strong><small>Clara lo tendrá más presente al calcular cuánto dinero puedes gastar con tranquilidad.</small></span></label>
+      <label className="check-option"><input type="checkbox" name="autoCreateTransaction" defaultChecked={item?.autoCreateTransaction || false} /><span><strong>Registrar gasto al marcarlo como pagado</strong><small>Cuando confirmes el pago, Clara descontará el monto de esta cuenta y creará el movimiento automáticamente.</small></span></label>
+    </div>
+  </>;
+}
+
 function OperationModal({ modal, data, saving, error, user, onClose, onSubmit }) {
   const { money, moneyFor, currencySymbol } = useMoney();
   const category = data.categories.find((item) => item.id === modal.referenceId);
   const goal = data.goals.find((item) => item.id === modal.referenceId);
   const account = data.accounts.find((item) => item.id === modal.referenceId);
+  const recurring = data.recurringPayments?.find((item) => item.id === modal.referenceId);
   const suggestedParent = modal.kind === "category" && modal.referenceId ? data.categories.find((item) => item.id === modal.referenceId) : null;
   const titles = {
     expense: { eyebrow: "Nuevo movimiento", title: "Registrar gasto", submit: "Guardar gasto" },
     income: { eyebrow: "Nuevo movimiento", title: "Registrar ingreso", submit: "Guardar ingreso" },
     transfer: { eyebrow: "Entre tus cuentas", title: "Hacer transferencia", submit: "Transferir dinero" },
     budget: { eyebrow: "Sobre del período", title: `Ajustar ${category?.name ?? "categoría"}`, submit: "Guardar sobre" },
+    "budget-delete": { eyebrow: "Quitar sobre", title: category?.name ?? "Eliminar sobre", submit: "Eliminar sobre", danger: true },
     "budget-copy": { eyebrow: "Plan rápido", title: "Usar el plan anterior", submit: "Copiar plan" },
+    recurring: { eyebrow: "Nuevo compromiso", title: "Programar pago recurrente", submit: "Guardar compromiso" },
+    "recurring-update": { eyebrow: "Editar compromiso", title: recurring?.name ?? "Editar pago recurrente", submit: "Guardar cambios" },
+    "recurring-paid": { eyebrow: "Confirmar pago", title: recurring?.name ?? "Marcar como pagado", submit: "Confirmar pago" },
+    "recurring-delete": { eyebrow: "Eliminar compromiso", title: recurring?.name ?? "Eliminar pago recurrente", submit: "Eliminar compromiso", danger: true },
     goal: { eyebrow: "Ahorro con destino", title: "Crear nueva meta", submit: "Crear meta" },
     "goal-contribution": { eyebrow: "Avanza un poco más", title: `Aportar a ${goal?.name ?? "la meta"}`, submit: "Guardar aporte" },
     account: { eyebrow: "Nueva cuenta", title: "Añadir cuenta", submit: "Crear cuenta" },
@@ -1726,7 +1909,7 @@ function OperationModal({ modal, data, saving, error, user, onClose, onSubmit })
         {modal.kind === "transfer" && <TransferFields data={data} />}
 
         {modal.kind === "budget" && <>
-          <div className="modal-context"><span className={`category-symbol ${category?.color ?? "mint"}`}>{category?.symbol ?? "CA"}</span><span><small>{data.period?.label || "Período actual"}</small><strong>{money(category?.periodLimit ?? 0)}</strong></span></div>
+          <div className="modal-context"><span className={`category-icon-tile ${category?.color ?? "mint"}`}><CategoryIcon category={category} size={19} /></span><span><small>{data.period?.label || "Período actual"}</small><strong>{money(category?.periodLimit ?? 0)}</strong></span></div>
           <label><span>Límite para este período</span><div className="money-field"><span>{currencySymbol}</span><input type="number" name="periodLimit" min="0" step="0.01" defaultValue={((category?.periodLimit ?? 0) / 100).toFixed(2)} required autoFocus /></div></label>
           <label><span>¿Qué tipo de sobre es?</span><select name="budgetKind" defaultValue={category?.budgetKind || "flexible"}>
             <option value="fixed">Compromiso fijo</option>
@@ -1745,6 +1928,22 @@ function OperationModal({ modal, data, saving, error, user, onClose, onSubmit })
         {modal.kind === "budget-copy" && <div className="copy-budget-confirmation">
           <span><Icon name="refresh" size={21} /></span>
           <div><strong>¿Copiar el plan anterior?</strong><p>Clara traerá los sobres del período anterior a <b>{data.period?.label || "este período"}</b>. Si ya configuraste alguno aquí, se actualizará con el valor anterior.</p></div>
+        </div>}
+
+        {modal.kind === "recurring" && <RecurringFields data={data} />}
+        {modal.kind === "recurring-update" && recurring && <RecurringFields data={data} item={recurring} />}
+
+        {modal.kind === "recurring-paid" && recurring && <>
+          <div className="modal-context recurring-context"><span className={`category-icon-tile ${recurring.categoryColor || "mint"}`}><CategoryIcon category={{ id: recurring.categoryId, parentId: recurring.parentCategoryId }} size={19} /></span><span><small>Vencimiento actual</small><strong>{moneyFor(recurring.amount, recurring.currencyCode)}</strong></span></div>
+          <p className="recurring-payment-copy">Programado para <b>{longDate(recurring.nextDueDate)}</b> desde <b>{recurring.accountName}</b>.</p>
+          <label><span>Fecha en que se pagó</span><input type="date" name="paidDate" required defaultValue={todayIso()} /></label>
+          <input type="hidden" name="registerExpense" value="false" />
+          <label className="check-option standalone"><input type="checkbox" name="registerExpense" value="true" defaultChecked={recurring.autoCreateTransaction} /><span><strong>Registrar también el gasto</strong><small>Si lo activas, Clara descontará {moneyFor(recurring.amount, recurring.currencyCode)} de {recurring.accountName} y creará el movimiento.</small></span></label>
+        </>}
+
+        {modal.kind === "recurring-delete" && recurring && <div className="danger-confirmation">
+          <span><Icon name="trash" size={20} /></span>
+          <div><strong>¿Eliminar {recurring.name}?</strong><p>Dejará de aparecer en el calendario y en tus próximos compromisos. Los gastos que ya hayas registrado se conservarán.</p></div>
         </div>}
 
         {modal.kind === "goal" && <>

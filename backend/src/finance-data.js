@@ -148,6 +148,47 @@ function budgetKindLabel(kind) {
   }[kind] || "Gasto flexible";
 }
 
+
+function addDays(dateTextValue, amount) {
+  const date = utcDate(dateTextValue);
+  date.setUTCDate(date.getUTCDate() + Number(amount || 0));
+  return date.toISOString().slice(0, 10);
+}
+
+function isoFromParts(year, month, day) {
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function advanceRecurringDate(dateValue, frequency, dueDay = null, dueMonth = null) {
+  const [year, month, day] = String(dateValue).slice(0, 10).split("-").map(Number);
+  if (frequency === "weekly" || frequency === "biweekly") return addDays(dateValue, frequency === "weekly" ? 7 : 14);
+  if (frequency === "yearly") {
+    const targetYear = year + 1;
+    const targetMonth = Number(dueMonth) >= 1 && Number(dueMonth) <= 12 ? Number(dueMonth) : month;
+    const targetDay = Math.min(Number(dueDay) || day, daysInMonth(targetYear, targetMonth));
+    return isoFromParts(targetYear, targetMonth, targetDay);
+  }
+  const index = year * 12 + (month - 1) + 1;
+  const targetYear = Math.floor(index / 12);
+  const targetMonth = (index % 12) + 1;
+  const targetDay = Math.min(Number(dueDay) || day, daysInMonth(targetYear, targetMonth));
+  return isoFromParts(targetYear, targetMonth, targetDay);
+}
+
+function recurringFrequencyLabel(value) {
+  return { weekly: "Semanal", biweekly: "Cada 2 semanas", monthly: "Mensual", yearly: "Anual" }[value] || "Mensual";
+}
+
+function monthBounds(dateValue) {
+  const [year, month] = String(dateValue).slice(0, 7).split("-").map(Number);
+  const monthText = String(month).padStart(2, "0");
+  return {
+    start: `${year}-${monthText}-01`,
+    end: `${year}-${monthText}-${String(daysInMonth(year, month)).padStart(2, "0")}`,
+    year, month,
+  };
+}
+
 function periodFixedExpenses(profile, period) {
   const amount = normalizeNumber(profile.fixedExpenses);
   return period.mode === "biweekly" ? Math.round(amount / 2) : amount;
@@ -296,6 +337,26 @@ export async function getFinanceData(database, userId) {
     [userId],
   );
 
+
+  const recurringRows = await database.all(
+    `SELECT rp.id, rp.name, rp.amount, rp.category_id AS categoryId, rp.account_id AS accountId,
+      rp.frequency, rp.next_due_date AS nextDueDate, rp.due_day AS dueDay, rp.due_month AS dueMonth,
+      COALESCE(rp.is_mandatory, 1) AS isMandatory,
+      COALESCE(rp.auto_create_transaction, 0) AS autoCreateTransaction,
+      COALESCE(rp.note, '') AS note, rp.last_paid_date AS lastPaidDate,
+      rp.created_at AS createdAt, rp.updated_at AS updatedAt,
+      a.name AS accountName, COALESCE(a.currency_code, ?) AS currencyCode,
+      COALESCE(NULLIF(c.display_name, ''), c.name) AS categoryName, c.color AS categoryColor, c.symbol AS categorySymbol,
+      c.parent_id AS parentCategoryId, COALESCE(NULLIF(parent.display_name, ''), parent.name) AS parentCategoryName
+     FROM recurring_payments rp
+     JOIN accounts a ON a.id = rp.account_id AND a.user_id = rp.user_id
+     JOIN categories c ON c.id = rp.category_id
+     LEFT JOIN categories parent ON parent.id = c.parent_id
+     WHERE rp.user_id = ? AND COALESCE(rp.is_active, 1) = 1
+     ORDER BY rp.next_due_date, rp.created_at, rp.id`,
+    [primaryCurrency, userId],
+  );
+
   const normalizedAccounts = accounts.map((account) => ({
     ...account,
     id: Number(account.id),
@@ -390,6 +451,26 @@ export async function getFinanceData(database, userId) {
     dueDate: dateText(goal.dueDate),
   }));
 
+
+  const recurringPayments = recurringRows.map((item) => ({
+    ...item,
+    id: Number(item.id),
+    amount: normalizeNumber(item.amount),
+    categoryId: Number(item.categoryId),
+    accountId: Number(item.accountId),
+    parentCategoryId: item.parentCategoryId ? Number(item.parentCategoryId) : null,
+    dueDay: item.dueDay ? Number(item.dueDay) : null,
+    dueMonth: item.dueMonth ? Number(item.dueMonth) : null,
+    isMandatory: Boolean(Number(item.isMandatory || 0)),
+    autoCreateTransaction: Boolean(Number(item.autoCreateTransaction || 0)),
+    nextDueDate: dateText(item.nextDueDate),
+    lastPaidDate: dateText(item.lastPaidDate),
+    currencyCode: String(item.currencyCode || primaryCurrency).toUpperCase(),
+    frequencyLabel: recurringFrequencyLabel(item.frequency),
+    createdAt: timestampText(item.createdAt),
+    updatedAt: timestampText(item.updatedAt),
+  }));
+
   const currencyTotals = normalizedAccounts.reduce((totals, account) => {
     totals[account.currencyCode] = (totals[account.currencyCode] || 0) + account.balance;
     return totals;
@@ -454,14 +535,6 @@ export async function getFinanceData(database, userId) {
   const usingProfileFixedFallback = explicitFixedCount === 0 && fixedFallback > 0;
   if (usingProfileFixedFallback) fixedReserve = fixedFallback;
 
-  const targetSavingsReserve = Math.round(primaryCashflow.income * Math.max(0, Math.min(profile.savingsTargetPercent, 100)) / 100);
-  const savingsReserve = Math.max(explicitSavingsReserve, targetSavingsReserve);
-  const nonLiquidProducts = new Set(["certificate", "investment", "contribution"]);
-  const liquidBalance = normalizedAccounts
-    .filter((account) => account.currencyCode === primaryCurrency && !nonLiquidProducts.has(account.productType))
-    .reduce((sum, account) => sum + account.balance, 0);
-  const safeToSpend = Math.max(liquidBalance - fixedReserve - savingsReserve, 0);
-
   const nextPayday = paydayDetails(profile, period);
   let safeUntil = period.end;
   let safeUntilKind = "period";
@@ -469,11 +542,126 @@ export async function getFinanceData(database, userId) {
     safeUntil = nextPayday.date;
     safeUntilKind = "payday";
   }
+
+  const calendarBounds = monthBounds(period.today);
+  const horizon30 = addDays(period.today, 30);
+  const eventHorizon = horizon30 > calendarBounds.end ? horizon30 : calendarBounds.end;
+  const recurringOccurrences = [];
+  for (const recurring of recurringPayments) {
+    const firstDate = recurring.nextDueDate;
+    if (!firstDate) continue;
+    if (firstDate < period.today) {
+      recurringOccurrences.push({ ...recurring, date: firstDate, overdue: true, projected: false });
+      continue;
+    }
+    let occurrenceDate = firstDate;
+    let guard = 0;
+    while (occurrenceDate <= eventHorizon && guard < 40) {
+      recurringOccurrences.push({ ...recurring, date: occurrenceDate, overdue: false, projected: occurrenceDate !== firstDate });
+      occurrenceDate = advanceRecurringDate(occurrenceDate, recurring.frequency, recurring.dueDay, recurring.dueMonth);
+      guard += 1;
+    }
+  }
+  recurringOccurrences.sort((a, b) => `${a.date}|${a.name}`.localeCompare(`${b.date}|${b.name}`));
+
+  const primaryOccurrences = recurringOccurrences.filter((item) => item.currencyCode === primaryCurrency);
+  const recurringBeforeSafe = primaryOccurrences.filter((item) => !item.overdue && item.date >= period.today && item.date <= safeUntil);
+  const overduePrimary = primaryOccurrences.filter((item) => item.overdue);
+  const recurringDueBeforeSafeTotal = [...overduePrimary, ...recurringBeforeSafe].reduce((sum, item) => sum + item.amount, 0);
+
+  const categoryByIdMap = new Map(normalizedCategories.map((category) => [category.id, category]));
+  const fixedCoverage = new Map();
+  for (const category of normalizedCategories) {
+    if (category.budgetKind === "fixed" && category.periodLimit > 0) fixedCoverage.set(category.id, category.remaining);
+  }
+
+  let recurringReserveExtra = 0;
+  if (usingProfileFixedFallback) {
+    recurringReserveExtra = Math.max(recurringDueBeforeSafeTotal - fixedReserve, 0);
+  } else {
+    const remainingCoverage = new Map(fixedCoverage);
+    for (const occurrence of [...overduePrimary, ...recurringBeforeSafe]) {
+      const category = categoryByIdMap.get(occurrence.categoryId);
+      const rootId = category?.parentId || category?.id;
+      const coverageId = remainingCoverage.has(occurrence.categoryId)
+        ? occurrence.categoryId
+        : remainingCoverage.has(rootId) ? rootId : null;
+      if (!coverageId) {
+        recurringReserveExtra += occurrence.amount;
+        continue;
+      }
+      const availableCoverage = remainingCoverage.get(coverageId) || 0;
+      const covered = Math.min(availableCoverage, occurrence.amount);
+      remainingCoverage.set(coverageId, availableCoverage - covered);
+      recurringReserveExtra += occurrence.amount - covered;
+    }
+  }
+  const protectedCommitments = fixedReserve + recurringReserveExtra;
+
+  const targetSavingsReserve = Math.round(primaryCashflow.income * Math.max(0, Math.min(profile.savingsTargetPercent, 100)) / 100);
+  const savingsReserve = Math.max(explicitSavingsReserve, targetSavingsReserve);
+  const nonLiquidProducts = new Set(["certificate", "investment", "contribution"]);
+  const liquidBalance = normalizedAccounts
+    .filter((account) => account.currencyCode === primaryCurrency && !nonLiquidProducts.has(account.productType))
+    .reduce((sum, account) => sum + account.balance, 0);
+  const safeToSpend = Math.max(liquidBalance - protectedCommitments - savingsReserve, 0);
   const daysForSafeSpend = Math.max(daysBetween(period.today, safeUntil) + 1, 1);
   const dailySafeToSpend = Math.floor(safeToSpend / daysForSafeSpend);
   const expectedPeriodIncome = expectedIncomeForPeriod(profile, period);
   const incomeReference = Math.max(primaryCashflow.income, expectedPeriodIncome);
   const unassignedBudget = Math.max(incomeReference - budgetTotal, 0);
+
+  const windowSummary = (days) => {
+    const end = addDays(period.today, days);
+    const allItems = recurringOccurrences.filter((item) => !item.overdue && item.date >= period.today && item.date <= end);
+    const items = allItems.filter((item) => item.currencyCode === primaryCurrency);
+    const totalsByCurrency = {};
+    for (const item of allItems) totalsByCurrency[item.currencyCode] = (totalsByCurrency[item.currencyCode] || 0) + item.amount;
+    return { days, count: items.length, countAll: allItems.length, total: items.reduce((sum, item) => sum + item.amount, 0), totalsByCurrency };
+  };
+  const overdueCommitments = recurringOccurrences.filter((item) => item.overdue).map((item) => ({
+    id: item.id, name: item.name, amount: item.amount, date: item.date, currencyCode: item.currencyCode,
+    accountName: item.accountName, categoryName: item.categoryName, overdue: true,
+  }));
+  const upcomingCommitments = recurringOccurrences
+    .filter((item) => !item.overdue && item.date >= period.today && item.date <= horizon30)
+    .slice(0, 40)
+    .map((item) => ({
+      id: item.id, name: item.name, amount: item.amount, date: item.date, currencyCode: item.currencyCode,
+      accountName: item.accountName, categoryName: item.categoryName, projected: item.projected,
+    }));
+
+  const calendarEvents = recurringOccurrences
+    .filter((item) => item.date >= calendarBounds.start && item.date <= calendarBounds.end)
+    .map((item) => ({
+      id: `recurring-${item.id}-${item.date}`, type: "recurring", recurringId: item.id, date: item.date,
+      title: item.name, amount: item.amount, currencyCode: item.currencyCode, mandatory: item.isMandatory, projected: item.projected,
+      categoryName: item.categoryName, accountName: item.accountName, overdue: item.overdue,
+    }));
+
+  const paydayEvents = [];
+  if (profile.incomeFrequency !== "irregular") {
+    if (profile.incomeFrequency === "weekly") {
+      let date = nextPayday?.date || period.today;
+      let guard = 0;
+      while (date <= calendarBounds.end && guard < 8) {
+        if (date >= calendarBounds.start) paydayEvents.push({ id: `payday-${date}`, type: "payday", date, title: "Día de cobro", amount: profile.incomeAmount, currencyCode: primaryCurrency });
+        date = addDays(date, 7);
+        guard += 1;
+      }
+    } else {
+      const configuredDays = [profile.paydayOne, profile.paydayTwo].map(Number).filter((day) => day >= 1 && day <= 31);
+      for (const requestedDay of [...new Set(configuredDays)]) {
+        const day = clampDay(calendarBounds.year, calendarBounds.month, requestedDay);
+        paydayEvents.push({
+          id: `payday-${calendarBounds.year}-${calendarBounds.month}-${day}`, type: "payday",
+          date: isoFromParts(calendarBounds.year, calendarBounds.month, day), title: "Día de cobro",
+          amount: profile.incomeAmount, currencyCode: primaryCurrency,
+        });
+      }
+    }
+  }
+  const calendarEventsCombined = [...calendarEvents, ...paydayEvents].sort((a, b) => `${a.date}|${a.type}`.localeCompare(`${b.date}|${b.type}`));
 
   const budgetAlerts = normalizedCategories
     .filter((category) => category.periodLimit > 0 && category.percentage >= 70)
@@ -562,6 +750,15 @@ export async function getFinanceData(database, userId) {
     adjustments: normalizedAdjustments,
     balanceHistory: balanceHistory.slice(0, 400),
     goals: normalizedGoals,
+    recurringPayments,
+    calendar: {
+      monthStart: calendarBounds.start,
+      monthEnd: calendarBounds.end,
+      events: calendarEventsCombined,
+      upcoming: upcomingCommitments,
+      overdue: overdueCommitments,
+      windows: { days7: windowSummary(7), days15: windowSummary(15), days30: windowSummary(30) },
+    },
     period: {
       ...period,
       daysRemaining: Math.max(daysBetween(period.today, period.end) + 1, 1),
@@ -576,6 +773,8 @@ export async function getFinanceData(database, userId) {
       incomeReference,
       liquidBalance,
       fixedReserve,
+      recurringReserve: recurringReserveExtra,
+      protectedCommitments,
       savingsReserve,
       safeToSpend,
       dailySafeToSpend,
@@ -583,6 +782,8 @@ export async function getFinanceData(database, userId) {
       safeUntil,
       safeUntilKind,
       nextPayday,
+      upcomingCommitments,
+      overdueCommitments,
       usingProfileFixedFallback,
       alerts: budgetAlerts,
       alertCount: budgetAlerts.length,
@@ -606,6 +807,8 @@ export async function getFinanceData(database, userId) {
       safeToSpend,
       dailySafeToSpend,
       fixedReserve,
+      recurringReserve: recurringReserveExtra,
+      protectedCommitments,
       savingsReserve,
       liquidBalance,
       budgetAlertCount: budgetAlerts.length,

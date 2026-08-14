@@ -8,7 +8,12 @@ import {
   createTransfer,
   updateAccount,
   updateBudget,
+  deleteBudgetForPeriod,
   copyPreviousBudget,
+  createRecurringPayment,
+  updateRecurringPayment,
+  deleteRecurringPayment,
+  markRecurringPaymentPaid,
 } from "../src/finance-engine.js";
 import { getFinanceData } from "../src/finance-data.js";
 
@@ -235,6 +240,123 @@ test("Clara 3.1 puede iniciar el período copiando el presupuesto clásico", asy
   assert.equal(vivienda.periodLimit, 400000);
   assert.equal(vivienda.hasPeriodBudget, true);
   assert.equal(vivienda.budgetKind, "flexible");
+
+  database.close();
+});
+
+
+test("Clara 3.2 permite quitar un sobre sin eliminar la categoría ni sus movimientos", async () => {
+  const database = createSqliteDatabase(":memory:");
+  const userId = await createUser(database, { username: "sobres32", planningPeriod: "biweekly" });
+  await database.run("INSERT INTO budgets (user_id, category_id, monthly_limit) VALUES (?, 1, 600000)", [userId]);
+
+  let data = await getFinanceData(database, userId);
+  const vivienda = data.categories.find((item) => item.id === 1);
+  assert.equal(vivienda.periodLimit, 300000);
+
+  await deleteBudgetForPeriod(database, userId, { categoryId: 1 });
+  data = await getFinanceData(database, userId);
+  const viviendaDespues = data.categories.find((item) => item.id === 1);
+  assert.ok(viviendaDespues, "La categoría Vivienda debe seguir existiendo");
+  assert.equal(viviendaDespues.periodLimit, 0, "El sobre queda eliminado solo para el período actual");
+
+  database.close();
+});
+
+test("Clara 3.2 protege compromisos recurrentes y puede convertir un pago en gasto", async () => {
+  const database = createSqliteDatabase(":memory:");
+  const userId = await createUser(database, { username: "recurrente32", planningPeriod: "monthly" });
+
+  await createAccount(database, userId, {
+    institutionType: "bank",
+    institutionName: "Banreservas",
+    productType: "payroll",
+    amount: "10000",
+    currencyCode: "DOP",
+  });
+  let data = await getFinanceData(database, userId);
+  const account = data.accounts.find((item) => item.institutionName === "Banreservas");
+  const services = data.categories.find((item) => item.id === 8);
+  const today = new Date().toISOString().slice(0, 10);
+
+  await createRecurringPayment(database, userId, {
+    name: "Internet",
+    amount: "1000",
+    accountId: account.id,
+    categoryId: services.id,
+    frequency: "monthly",
+    nextDueDate: today,
+    isMandatory: "on",
+    autoCreateTransaction: "on",
+    note: "Plan hogar",
+  });
+
+  data = await getFinanceData(database, userId);
+  assert.equal(data.recurringPayments.length, 1);
+  assert.equal(data.budgetPlan.recurringReserve, 100000);
+  assert.equal(data.budgetPlan.protectedCommitments, 100000);
+  assert.equal(data.budgetPlan.safeToSpend, 900000);
+  assert.ok(data.calendar.events.some((event) => event.type === "recurring" && event.title === "Internet"));
+
+  const recurring = data.recurringPayments[0];
+  await markRecurringPaymentPaid(database, userId, {
+    recurringId: recurring.id,
+    paidDate: today,
+    registerExpense: "on",
+  });
+
+  data = await getFinanceData(database, userId);
+  const internetExpense = data.transactions.find((item) => item.externalRef?.startsWith(`recurring:${recurring.id}:`));
+  assert.ok(internetExpense, "Marcar pagado debe poder registrar el gasto");
+  assert.equal(internetExpense.amount, 100000);
+  assert.equal(data.accounts.find((item) => item.id === account.id).balance, 900000);
+  assert.notEqual(data.recurringPayments[0].nextDueDate, today, "El próximo vencimiento debe avanzar");
+
+  database.close();
+});
+
+
+test("Clara 3.2 permite editar y desactivar compromisos recurrentes", async () => {
+  const database = createSqliteDatabase(":memory:");
+  const userId = await createUser(database, { username: "crud32", planningPeriod: "monthly" });
+  await createAccount(database, userId, {
+    institutionType: "bank", institutionName: "Banco Popular Dominicano", productType: "checking", amount: "5000", currencyCode: "DOP",
+  });
+  let data = await getFinanceData(database, userId);
+  const account = data.accounts[0];
+  const category = data.categories.find((item) => item.id === 8);
+  const today = new Date().toISOString().slice(0, 10);
+
+  await createRecurringPayment(database, userId, {
+    name: "Internet hogar",
+    amount: "1500",
+    accountId: account.id,
+    categoryId: category.id,
+    frequency: "monthly",
+    nextDueDate: today,
+    isMandatory: "on",
+  });
+  data = await getFinanceData(database, userId);
+  const recurring = data.recurringPayments[0];
+
+  await updateRecurringPayment(database, userId, {
+    recurringId: recurring.id,
+    name: "Internet y teléfono",
+    amount: "1800",
+    accountId: account.id,
+    categoryId: category.id,
+    frequency: "monthly",
+    nextDueDate: today,
+    isMandatory: "on",
+    autoCreateTransaction: "",
+  });
+  data = await getFinanceData(database, userId);
+  assert.equal(data.recurringPayments[0].name, "Internet y teléfono");
+  assert.equal(data.recurringPayments[0].amount, 180000);
+
+  await deleteRecurringPayment(database, userId, { recurringId: recurring.id });
+  data = await getFinanceData(database, userId);
+  assert.equal(data.recurringPayments.length, 0);
 
   database.close();
 });
