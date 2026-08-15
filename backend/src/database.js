@@ -41,6 +41,7 @@ function ensureSqliteMultiUserSchema(database) {
     ["users", "last_name", "TEXT NOT NULL DEFAULT ''"],
     ["users", "phone", "TEXT NOT NULL DEFAULT ''"],
     ["users", "email", "TEXT NULL"],
+    ["users", "email_verified_at", "TEXT NULL"],
     ["accounts", "user_id", "INTEGER"],
     ["accounts", "institution_type", "TEXT NOT NULL DEFAULT 'other'"],
     ["accounts", "institution_name", "TEXT NOT NULL DEFAULT ''"],
@@ -152,6 +153,16 @@ function ensureSqliteMultiUserSchema(database) {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(user_id, snapshot_date, primary_currency)
+    );
+    CREATE TABLE IF NOT EXISTS email_verification_codes (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      email TEXT NOT NULL,
+      code_hash TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_sent_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS mail_sync_connections (
       user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -400,6 +411,7 @@ async function ensureTidbMultiUserSchema(connection) {
     ["users", "last_name", "VARCHAR(80) NOT NULL DEFAULT ''"],
     ["users", "phone", "VARCHAR(30) NOT NULL DEFAULT ''"],
     ["users", "email", "VARCHAR(190) NULL"],
+    ["users", "email_verified_at", "DATETIME NULL"],
     ["accounts", "user_id", "BIGINT NULL"],
     ["accounts", "institution_type", "VARCHAR(30) NOT NULL DEFAULT 'other'"],
     ["accounts", "institution_name", "VARCHAR(150) NOT NULL DEFAULT ''"],
@@ -522,6 +534,17 @@ async function ensureTidbMultiUserSchema(connection) {
     CONSTRAINT fk_financial_snapshots_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   )`);
 
+  await connection.query(`CREATE TABLE IF NOT EXISTS email_verification_codes (
+    user_id BIGINT PRIMARY KEY,
+    email VARCHAR(190) NOT NULL,
+    code_hash CHAR(64) NOT NULL,
+    expires_at DATETIME NOT NULL,
+    attempts INT NOT NULL DEFAULT 0,
+    last_sent_at DATETIME NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_email_verification_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
   await connection.query(`CREATE TABLE IF NOT EXISTS mail_sync_connections (
     user_id BIGINT PRIMARY KEY, sync_token VARCHAR(80) NOT NULL UNIQUE, is_enabled TINYINT(1) NOT NULL DEFAULT 1,
     auto_mode VARCHAR(30) NOT NULL DEFAULT 'review', last_received_at DATETIME NULL,

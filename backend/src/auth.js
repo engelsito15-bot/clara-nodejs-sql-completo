@@ -110,6 +110,8 @@ function publicUser(user) {
     lastName,
     username: user.username,
     email: user.email || "",
+    emailVerified: Boolean(user.emailVerifiedAt || user.email_verified_at),
+    requiresEmailVerification: Boolean(user.email) && !Boolean(user.emailVerifiedAt || user.email_verified_at),
     loginIdentifier: user.email || user.username,
     requiresEmailMigration: !user.email,
     currencyCode: user.currencyCode || user.currency_code || "DOP",
@@ -141,7 +143,7 @@ function publicUser(user) {
 async function userWithProfile(database, userId) {
   return database.get(
     `SELECT u.id, u.name, u.first_name AS firstName, u.last_name AS lastName,
-      u.username, COALESCE(u.email, '') AS email, u.currency_code AS currencyCode, u.phone,
+      u.username, COALESCE(u.email, '') AS email, u.email_verified_at AS emailVerifiedAt, u.currency_code AS currencyCode, u.phone,
       COALESCE(p.onboarding_completed, 0) AS onboardingCompleted,
       p.age,
       COALESCE(p.income_type, '') AS incomeType,
@@ -455,7 +457,11 @@ export async function updateFinancialProfile(database, userId, payload) {
     const email = normalizeEmail(payload.email, true);
     const existing = await database.get("SELECT id FROM users WHERE email = ? AND id <> ?", [email, userId]);
     if (existing) throw requestError("Ese correo ya está asociado a otra cuenta de Clara.", 409);
-    await database.run("UPDATE users SET email = ? WHERE id = ?", [email, userId]);
+    const currentEmail = await database.get("SELECT COALESCE(email, '') AS email FROM users WHERE id = ?", [userId]);
+    if (String(currentEmail?.email || "").toLowerCase() !== email) {
+      await database.run("UPDATE users SET email = ?, email_verified_at = NULL WHERE id = ?", [email, userId]);
+      await database.run("DELETE FROM email_verification_codes WHERE user_id = ?", [userId]);
+    }
   }
   const merged = {
     ...current.profile,

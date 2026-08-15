@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { institutionsForType } from "./institutions.js";
 import { usePwaManager, saveOfflineSnapshot, loadOfflineSnapshot, clearOfflineSnapshots } from "./pwa.js";
 
@@ -1073,7 +1073,14 @@ function SavingsApp() {
     setAuth((current) => ({ ...current, user }));
     void saveOfflineSnapshot("auth-user", user);
     setEmailMigrationDismissed(false);
-    setNotice("Tu correo ya es tu usuario de acceso.");
+    setNotice("Te enviamos un código para verificar tu correo.");
+    window.setTimeout(() => setNotice(""), 3500);
+  }
+
+  function handleEmailVerified(user) {
+    setAuth((current) => ({ ...current, user }));
+    void saveOfflineSnapshot("auth-user", user);
+    setNotice("Correo verificado. Tu cuenta ya está protegida.");
     window.setTimeout(() => setNotice(""), 3500);
   }
 
@@ -1084,7 +1091,7 @@ function SavingsApp() {
   }
 
   useEffect(() => {
-    if (!auth.user?.id || !auth.user.onboardingCompleted || auth.user.requiresEmailMigration) return;
+    if (!auth.user?.id || !auth.user.onboardingCompleted || auth.user.requiresEmailMigration || auth.user.requiresEmailVerification) return;
     if (!pwa.mobile || !pwa.pushAvailable || pwa.pushEnabled || pwa.notificationPermission === "denied") return;
     if (pwa.ios && !pwa.installed) return;
     if (pwa.showInstallPrompt || pwa.showIosGuide) return;
@@ -1092,7 +1099,7 @@ function SavingsApp() {
     if (last && Date.now() - last < 7 * 24 * 60 * 60 * 1000) return;
     const timer = window.setTimeout(() => setNotificationPromptOpen(true), 1200);
     return () => window.clearTimeout(timer);
-  }, [auth.user?.id, auth.user?.onboardingCompleted, auth.user?.requiresEmailMigration, pwa.mobile, pwa.pushAvailable, pwa.pushEnabled, pwa.notificationPermission, pwa.installed, pwa.ios, pwa.showInstallPrompt, pwa.showIosGuide]);
+  }, [auth.user?.id, auth.user?.onboardingCompleted, auth.user?.requiresEmailMigration, auth.user?.requiresEmailVerification, pwa.mobile, pwa.pushAvailable, pwa.pushEnabled, pwa.notificationPermission, pwa.installed, pwa.ios, pwa.showInstallPrompt, pwa.showIosGuide]);
 
   async function logout() {
     try {
@@ -1112,6 +1119,7 @@ function SavingsApp() {
   if (auth.checking) return <><LoadingScreen />{pwaInstallUi}</>;
   if (!auth.user) return <><AuthScreen registrationEnabled={auth.registrationEnabled} onAuthenticated={handleAuthenticated} />{pwaInstallUi}</>;
   if (auth.user.requiresEmailMigration && !emailMigrationDismissed) return <><EmailMigrationPrompt user={auth.user} token={token} onUpdated={handleEmailMigrationUpdated} onLater={() => setEmailMigrationDismissed(true)} />{pwaInstallUi}</>;
+  if (auth.user.requiresEmailVerification) return <><EmailVerificationPrompt user={auth.user} token={token} onVerified={handleEmailVerified} onLogout={logout} />{pwaInstallUi}</>;
   if (!auth.user.onboardingCompleted || profileWizardOpen) return <MoneyContext.Provider value={moneyTools}><OnboardingWizard user={auth.user} saving={onboardingSaving} error={error} onSubmit={finishOnboarding} editing={profileWizardOpen && auth.user.onboardingCompleted} onCancel={auth.user.onboardingCompleted ? () => { setProfileWizardOpen(false); setError(""); } : null} />{pwaInstallUi}</MoneyContext.Provider>;
 
   return <MoneyContext.Provider value={moneyTools}>
@@ -2349,7 +2357,7 @@ function MailSyncView({ token, data, onFinanceRefresh }) {
       <div className="sync-hero-actions"><span className={state?.enabled ? "sync-status active" : "sync-status"}><i/>{state?.enabled ? "Activo" : "Pausado"}</span><button type="button" className="sync-pause-button" onClick={() => void updateSettings(state?.autoMode || "review", !state?.enabled)} disabled={saving}>{state?.enabled ? "Pausar" : "Activar"}</button></div>
     </section>
 
-    {!state?.configured && <div className="inline-alert mail-config-alert"><span><strong>Falta configurar el buzón receptor.</strong> En Render agrega MAIL_SYNC_INBOX_ADDRESS y MAIL_SYNC_SECRET para recibir correos desde n8n.</span></div>}
+    {!state?.configured && <div className="mail-setup-banner"><span className="card-icon"><Icon name="settings" size={19}/></span><div><strong>Completa la conexión de Clara Mail</strong><p>El módulo ya está listo. Solo falta conectar el buzón receptor y n8n para empezar a recibir alertas bancarias.</p></div><span className="setup-pill">Pendiente de configuración</span></div>}
 
     <section className="mail-sync-grid">
       <article className="view-card forwarding-card">
@@ -2361,13 +2369,16 @@ function MailSyncView({ token, data, onFinanceRefresh }) {
 
     <section className="view-card sync-source-section">
       <div className="section-heading"><div><p className="eyebrow">Instituciones reconocidas</p><h3>Indica qué correo pertenece a cada cuenta</h3><p>Esto evita que un correo cualquiera pueda modificar tus saldos.</p></div></div>
-      <form className="sync-source-form" onSubmit={addSource}>
-        <label><span>Banco o institución</span><input name="institutionName" required placeholder="Ej. Banreservas"/></label>
-        <label><span>Correo que envía las alertas</span><input type="email" name="senderMatch" required placeholder="alertas@banco.com"/></label>
-        <label><span>Cuenta correspondiente</span><select name="accountId" required defaultValue=""><option value="" disabled>Selecciona una cuenta</option>{data.accounts.map((account)=><option key={account.id} value={account.id}>{account.name} · {account.currencyCode}</option>)}</select></label>
-        <label><span>Últimos 4 dígitos (opcional)</span><input name="maskedRef" inputMode="numeric" maxLength="4" placeholder="4132"/></label>
-        <label><span>Categoría predeterminada (opcional)</span><select name="defaultCategoryId" defaultValue=""><option value="">Preguntarme</option>{data.categories.filter((cat)=>!cat.parentId).map((cat)=><option key={cat.id} value={cat.id}>{cat.displayName || cat.name}</option>)}</select></label>
-        <button className="primary-action sync-add-source" disabled={saving}><Icon name="plus" size={16}/>Agregar fuente</button>
+      <form className="sync-source-form sync-source-builder" onSubmit={addSource}>
+        <div className="source-builder-head"><span className="source-builder-icon"><Icon name="wallet" size={20}/></span><div><strong>Añadir una fuente bancaria</strong><small>Usa los datos exactos de una notificación real enviada por tu banco.</small></div></div>
+        <div className="source-builder-grid">
+          <label className="source-field source-field-institution"><span>Banco o institución</span><input name="institutionName" required placeholder="Ej. Banreservas"/><small>Nombre que verás dentro de Clara.</small></label>
+          <label className="source-field source-field-sender"><span>Correo remitente del banco</span><input type="email" name="senderMatch" required placeholder="alertas@banco.com"/><small>Cópialo exactamente desde una alerta bancaria real.</small></label>
+          <label className="source-field source-field-account"><span>Cuenta de Clara</span><select name="accountId" required defaultValue=""><option value="" disabled>Selecciona la cuenta relacionada</option>{data.accounts.map((account)=><option key={account.id} value={account.id}>{account.name} · {account.currencyCode}</option>)}</select><small>Los movimientos detectados se asociarán a esta cuenta.</small></label>
+          <label className="source-field source-field-last4"><span>Últimos 4 dígitos</span><input name="maskedRef" inputMode="numeric" maxLength="4" placeholder="4132"/><small>Opcional, pero aumenta la seguridad.</small></label>
+          <label className="source-field source-field-category"><span>Categoría habitual</span><select name="defaultCategoryId" defaultValue=""><option value="">Preguntarme cada vez</option>{data.categories.filter((cat)=>!cat.parentId).map((cat)=><option key={cat.id} value={cat.id}>{cat.displayName || cat.name}</option>)}</select><small>Clara puede seguir preguntando si no estás seguro.</small></label>
+        </div>
+        <div className="source-builder-actions"><span><Icon name="shield" size={14}/> Solo los remitentes que agregues aquí podrán asociarse automáticamente a tus cuentas.</span><button className="primary-action sync-add-source" disabled={saving}><Icon name="plus" size={16}/>Guardar institución</button></div>
       </form>
       <div className="sync-source-list">{state?.sources?.length ? state.sources.map((source)=><div className="sync-source-item" key={source.id}><span className="source-mark"><Icon name="mail" size={18}/></span><div><strong>{source.institutionName}</strong><small>{source.senderMatch} · {source.accountName}{source.maskedRef ? ` · ••••${source.maskedRef}` : ""}</small></div><button className="icon-button danger-soft" onClick={()=>void removeSource(source.id)} aria-label="Eliminar fuente"><Icon name="trash" size={16}/></button></div>) : <div className="empty-inline"><Icon name="inbox" size={20}/><span><strong>Aún no has agregado bancos.</strong><small>Agrega el remitente exacto de una notificación bancaria real.</small></span></div>}</div>
     </section>
@@ -2386,6 +2397,68 @@ function EmailMigrationPrompt({ user, token, onUpdated, onLater }) {
   const [email, setEmail] = useState(""); const [saving, setSaving] = useState(false); const [error, setError] = useState("");
   async function submit(event) { event.preventDefault(); setSaving(true); setError(""); try { const {response,result}=await apiRequest("/api/settings",{method:"PATCH",body:JSON.stringify({email})},token); if(!response.ok||!result?.user) throw new Error(result?.error||"No se pudo agregar tu correo."); onUpdated(result.user); } catch(err){setError(err.message||"No se pudo agregar tu correo.");} finally{setSaving(false);} }
   return <div className="pwa-install-backdrop account-migration-backdrop"><section className="account-migration-card" role="dialog" aria-modal="true"><span className="migration-icon"><Icon name="mail" size={24}/></span><p className="eyebrow">Actualización de acceso</p><h2>Tu correo será tu nuevo usuario de Clara.</h2><p>Tu cuenta fue creada antes de este cambio. Agrega tu correo y desde ahora iniciarás sesión con él. Nada de tus cuentas, movimientos o metas se modifica.</p><div className="legacy-user-line"><small>Usuario anterior</small><strong>@{user.username}</strong></div><form onSubmit={submit}><label><span>Correo electrónico</span><div className="input-with-icon"><Icon name="mail" size={16}/><input type="email" required autoFocus value={email} onChange={(e)=>setEmail(e.target.value)} placeholder="tunombre@correo.com"/></div></label>{error&&<p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="secondary-action" onClick={onLater}>Más tarde</button><button className="primary-action" disabled={saving}>{saving?"Guardando…":"Usar este correo"}</button></div></form><small className="migration-foot">Mientras no lo agregues, podrás seguir entrando temporalmente con tu usuario anterior.</small></section></div>;
+}
+
+function EmailVerificationPrompt({ user, token, onVerified, onLogout }) {
+  const [code, setCode] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("Revisa tu bandeja de entrada y también Spam o Promociones.");
+  const autoRequested = useRef(false);
+
+  async function sendCode({ quiet = false } = {}) {
+    setSending(true);
+    if (!quiet) { setError(""); setMessage(""); }
+    try {
+      const { response, result } = await apiRequest("/api/auth/email-verification/send", { method: "POST", body: "{}" }, token);
+      if (!response.ok) {
+        if (quiet && response.status === 429) return;
+        throw new Error(result?.error || "No se pudo enviar el código.");
+      }
+      setMessage(result?.alreadyVerified ? "Este correo ya estaba verificado." : "Código enviado. Vence en 10 minutos.");
+    } catch (err) {
+      if (!quiet) setError(err.message || "No se pudo enviar el código.");
+    } finally { setSending(false); }
+  }
+
+  useEffect(() => {
+    if (autoRequested.current) return;
+    autoRequested.current = true;
+    void sendCode({ quiet: true });
+  }, [token]);
+
+  async function verify(event) {
+    event.preventDefault();
+    if (!/^\d{6}$/.test(code)) { setError("Escribe los 6 dígitos del código."); return; }
+    setSaving(true); setError("");
+    try {
+      const { response, result } = await apiRequest("/api/auth/email-verification/verify", {
+        method: "POST",
+        body: JSON.stringify({ code }),
+      }, token);
+      if (!response.ok || !result?.user) throw new Error(result?.error || "No se pudo verificar el correo.");
+      onVerified(result.user);
+    } catch (err) { setError(err.message || "No se pudo verificar el correo."); }
+    finally { setSaving(false); }
+  }
+
+  return <div className="pwa-install-backdrop email-verification-backdrop">
+    <section className="email-verification-card" role="dialog" aria-modal="true" aria-labelledby="email-verification-title">
+      <span className="verification-icon"><Icon name="mail" size={25}/></span>
+      <p className="eyebrow">Protege tu cuenta</p>
+      <h2 id="email-verification-title">Verifica que este correo es tuyo</h2>
+      <p>Enviamos un código de 6 dígitos a <strong>{user.email}</strong>. Así Clara sabe que el correo que usarás para iniciar sesión realmente te pertenece.</p>
+      <form onSubmit={verify}>
+        <label className="verification-code-field"><span>Código de verificación</span><input value={code} onChange={(event)=>setCode(event.target.value.replace(/\D/g, "").slice(0,6))} inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="000000" aria-label="Código de verificación de 6 dígitos"/></label>
+        {message && <p className="verification-message"><Icon name="info" size={14}/>{message}</p>}
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <button className="primary-action verification-submit" disabled={saving || code.length !== 6}>{saving ? "Verificando…" : "Verificar correo"}<Icon name="arrowRight" size={16}/></button>
+      </form>
+      <div className="verification-secondary-actions"><button type="button" onClick={()=>void sendCode()} disabled={sending}>{sending ? "Enviando…" : "Enviar otro código"}</button><button type="button" onClick={onLogout}>Cerrar sesión</button></div>
+      <small>El código vence en 10 minutos. Clara nunca te pedirá contraseñas bancarias por correo.</small>
+    </section>
+  </div>;
 }
 
 function NotificationOptInPrompt({ pwa, onLater }) {
@@ -2411,7 +2484,7 @@ function SettingsModal({ user, saving, error, onClose, onSubmit, onLogout, onEdi
           <label><span>Nombre</span><input name="firstName" autoComplete="given-name" required defaultValue={user.firstName || user.name?.split(" ")[0] || ""} /></label>
           <label><span>Apellido</span><input name="lastName" autoComplete="family-name" required defaultValue={user.lastName || user.name?.split(" ").slice(1).join(" ") || ""} /></label>
         </div>
-        <label><span>Correo de acceso</span><div className="input-with-icon"><Icon name="mail" size={16} /><input type="email" name="email" autoComplete="email" required defaultValue={user.email || ""} placeholder="tunombre@correo.com" /></div><small className="field-help">Este es el usuario que usarás para iniciar sesión en Clara.</small></label>
+        <label><span>Correo de acceso {user.emailVerified && <em className="verified-email-badge"><Icon name="check" size={11}/> Verificado</em>}</span><div className="input-with-icon"><Icon name="mail" size={16} /><input type="email" name="email" autoComplete="email" required defaultValue={user.email || ""} placeholder="tunombre@correo.com" /></div><small className="field-help">Este es el usuario que usarás para iniciar sesión en Clara. Si lo cambias, te pediremos verificar el nuevo correo.</small></label>
         <label><span>Teléfono del perfil</span><div className="input-with-icon"><Icon name="phone" size={16} /><input type="tel" name="phone" autoComplete="tel" inputMode="tel" required defaultValue={user.phone || ""} placeholder="Ej. (809) 555-1234" /></div></label>
         <label><span>Moneda del sistema</span>
           <select name="currencyCode" defaultValue={user.currencyCode || "DOP"}>

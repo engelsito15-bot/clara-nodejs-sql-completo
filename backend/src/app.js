@@ -16,6 +16,11 @@ import {
   updateFinancialProfile,
 } from "./auth.js";
 import { createDatabase, runInTransaction } from "./database.js";
+import {
+  emailVerificationStatus,
+  sendEmailVerificationCode,
+  verifyEmailCode,
+} from "./email-verification.js";
 import { getFinanceData } from "./finance-data.js";
 import {
   pwaPublicConfig,
@@ -481,7 +486,17 @@ export function createApp({ databasePath } = {}) {
 
   app.post("/api/auth/register", limitRegistration, async (request, response, next) => {
     try {
-      response.status(201).json(await registerUser(database, request.body || {}));
+      if (!emailVerificationStatus().configured) {
+        throw requestError("La verificación por correo todavía no está configurada. Inténtalo nuevamente en unos minutos.", 503);
+      }
+      const created = await registerUser(database, request.body || {});
+      try {
+        const verification = await sendEmailVerificationCode(database, created.user.id, { force: true });
+        response.status(201).json({ ...created, verification });
+      } catch (error) {
+        await database.run("DELETE FROM users WHERE id = ?", [created.user.id]).catch(() => {});
+        throw error;
+      }
     } catch (error) {
       next(error);
     }
@@ -506,6 +521,30 @@ export function createApp({ databasePath } = {}) {
     } catch (error) {
       next(error);
     }
+  });
+
+  app.get("/api/auth/email-verification/status", protect, async (request, response, next) => {
+    try {
+      response.json({
+        configured: emailVerificationStatus().configured,
+        email: request.auth.user.email || "",
+        verified: Boolean(request.auth.user.emailVerified),
+      });
+    } catch (error) { next(error); }
+  });
+
+  app.post("/api/auth/email-verification/send", protect, async (request, response, next) => {
+    try {
+      response.json(await sendEmailVerificationCode(database, request.auth.user.id));
+    } catch (error) { next(error); }
+  });
+
+  app.post("/api/auth/email-verification/verify", protect, async (request, response, next) => {
+    try {
+      await verifyEmailCode(database, request.auth.user.id, request.body?.code);
+      const user = await authenticatedUser(database, bearerToken(request));
+      response.json({ verified: true, user });
+    } catch (error) { next(error); }
   });
 
   app.post("/api/auth/logout", protect, async (request, response, next) => {
@@ -539,6 +578,11 @@ export function createApp({ databasePath } = {}) {
   app.patch("/api/settings", protect, async (request, response, next) => {
     try {
       let user = request.auth.user;
+      const requestedEmail = request.body?.email === undefined ? undefined : String(request.body.email || "").trim().toLowerCase();
+      const emailChanged = requestedEmail !== undefined && requestedEmail !== String(request.auth.user.email || "").trim().toLowerCase();
+      if (emailChanged && !emailVerificationStatus().configured) {
+        throw requestError("La verificación por correo todavía no está configurada. No cambiamos tu correo.", 503);
+      }
       if (request.body?.currencyCode) {
         user = await updateCurrency(database, request.auth.user.id, request.body.currencyCode);
       }
@@ -555,7 +599,11 @@ export function createApp({ databasePath } = {}) {
           email: request.body.email,
         });
       }
-      response.json({ user });
+      let verification = null;
+      if (emailChanged && user?.email && !user.emailVerified) {
+        verification = await sendEmailVerificationCode(database, request.auth.user.id, { force: true });
+      }
+      response.json({ user, verification });
     } catch (error) {
       next(error);
     }

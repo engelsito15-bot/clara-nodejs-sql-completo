@@ -8,11 +8,23 @@ CREATE TABLE IF NOT EXISTS users (
   last_name TEXT NOT NULL DEFAULT '',
   username TEXT NOT NULL UNIQUE,
   email TEXT NULL,
+  email_verified_at TEXT NULL,
   password_salt TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   currency_code TEXT NOT NULL DEFAULT 'DOP',
   phone TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS email_verification_codes (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  email TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_sent_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS user_profiles (
