@@ -27,6 +27,15 @@ import {
   runFinancialReminders,
 } from "./pwa.js";
 import {
+  getMailSyncState,
+  updateMailSyncSettings,
+  createMailSyncSource,
+  deleteMailSyncSource,
+  ingestMailSyncMessage,
+  confirmMailSyncMessage,
+  ignoreMailSyncMessage,
+} from "./mail-sync.js";
+import {
   createTransaction as engineCreateTransaction,
   createTransfer as engineCreateTransfer,
   updateBudget as engineUpdateBudget,
@@ -365,7 +374,7 @@ function createLoginLimiter() {
   return createRequestLimiter({
     windowMs: 15 * 60 * 1000,
     maxAttempts: 8,
-    keyForRequest: (request) => `${requestIp(request)}:${String(request.body?.username || "").trim().toLowerCase() || "anonymous"}`,
+    keyForRequest: (request) => `${requestIp(request)}:${String(request.body?.identifier || request.body?.email || request.body?.username || "").trim().toLowerCase() || "anonymous"}`,
     message: "Demasiados intentos para ese usuario. Espera unos minutos antes de volver a intentar.",
   });
 }
@@ -536,18 +545,57 @@ export function createApp({ databasePath } = {}) {
       if (
         request.body?.phone !== undefined ||
         request.body?.firstName !== undefined ||
-        request.body?.lastName !== undefined
+        request.body?.lastName !== undefined ||
+        request.body?.email !== undefined
       ) {
         user = await updateFinancialProfile(database, request.auth.user.id, {
           phone: request.body.phone,
           firstName: request.body.firstName,
           lastName: request.body.lastName,
+          email: request.body.email,
         });
       }
       response.json({ user });
     } catch (error) {
       next(error);
     }
+  });
+
+  app.get("/api/mail-sync", protect, async (request, response, next) => {
+    try { response.json({ mailSync: await getMailSyncState(database, request.auth.user.id) }); }
+    catch (error) { next(error); }
+  });
+
+  app.patch("/api/mail-sync", protect, async (request, response, next) => {
+    try { response.json({ mailSync: await updateMailSyncSettings(database, request.auth.user.id, request.body || {}) }); }
+    catch (error) { next(error); }
+  });
+
+  app.post("/api/mail-sync/sources", protect, async (request, response, next) => {
+    try { response.status(201).json({ mailSync: await createMailSyncSource(database, request.auth.user.id, request.body || {}) }); }
+    catch (error) { next(error); }
+  });
+
+  app.delete("/api/mail-sync/sources/:id", protect, async (request, response, next) => {
+    try { response.json({ mailSync: await deleteMailSyncSource(database, request.auth.user.id, request.params.id) }); }
+    catch (error) { next(error); }
+  });
+
+  app.post("/api/mail-sync/messages/:id/confirm", protect, async (request, response, next) => {
+    try { response.json({ mailSync: await confirmMailSyncMessage(database, request.auth.user.id, request.params.id, request.body || {}) }); }
+    catch (error) { next(error); }
+  });
+
+  app.post("/api/mail-sync/messages/:id/ignore", protect, async (request, response, next) => {
+    try { response.json({ mailSync: await ignoreMailSyncMessage(database, request.auth.user.id, request.params.id) }); }
+    catch (error) { next(error); }
+  });
+
+  app.post("/api/mail-sync/inbound", async (request, response, next) => {
+    try {
+      const result = await ingestMailSyncMessage(database, request.headers, request.body || {});
+      response.status(result.duplicate ? 200 : 201).json(result);
+    } catch (error) { next(error); }
   });
 
   app.get("/api/finance", protect, async (request, response, next) => {

@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
   first_name TEXT NOT NULL DEFAULT '',
   last_name TEXT NOT NULL DEFAULT '',
   username TEXT NOT NULL UNIQUE,
+  email TEXT NULL,
   password_salt TEXT NOT NULL,
   password_hash TEXT NOT NULL,
   currency_code TEXT NOT NULL DEFAULT 'DOP',
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS notification_log (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(user_id, reminder_key, sent_on)
 );
+
 
 CREATE TABLE IF NOT EXISTS accounts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -289,6 +291,51 @@ CREATE TABLE IF NOT EXISTS financial_snapshots (
   UNIQUE(user_id, snapshot_date, primary_currency)
 );
 
+CREATE TABLE IF NOT EXISTS mail_sync_connections (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  sync_token TEXT NOT NULL UNIQUE,
+  is_enabled INTEGER NOT NULL DEFAULT 1,
+  auto_mode TEXT NOT NULL DEFAULT 'review',
+  last_received_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS mail_sync_sources (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  institution_name TEXT NOT NULL,
+  sender_match TEXT NOT NULL,
+  account_id INTEGER NOT NULL REFERENCES accounts(id),
+  masked_ref TEXT NOT NULL DEFAULT '',
+  default_category_id INTEGER REFERENCES categories(id),
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS mail_sync_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  source_id INTEGER REFERENCES mail_sync_sources(id) ON DELETE SET NULL,
+  message_hash TEXT NOT NULL UNIQUE,
+  sender TEXT NOT NULL DEFAULT '',
+  subject TEXT NOT NULL DEFAULT '',
+  received_at TEXT NOT NULL,
+  movement_type TEXT NOT NULL DEFAULT 'unknown',
+  amount INTEGER NOT NULL DEFAULT 0,
+  reported_balance INTEGER NOT NULL DEFAULT 0,
+  currency_code TEXT NOT NULL DEFAULT 'DOP',
+  merchant TEXT NOT NULL DEFAULT '',
+  reference TEXT NOT NULL DEFAULT '',
+  masked_ref TEXT NOT NULL DEFAULT '',
+  confidence INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'review',
+  transaction_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
+  excerpt TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+
 CREATE TABLE IF NOT EXISTS app_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -301,6 +348,8 @@ CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(use
 CREATE INDEX IF NOT EXISTS idx_notification_log_user_date ON notification_log(user_id, sent_on);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expiration ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_mail_sync_sources_user ON mail_sync_sources(user_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_mail_sync_messages_user_status ON mail_sync_messages(user_id, status, received_at);
 
 
 CREATE INDEX IF NOT EXISTS idx_hidden_categories_user ON user_hidden_categories(user_id);

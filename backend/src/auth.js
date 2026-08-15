@@ -26,6 +26,15 @@ function normalizeUsername(value) {
   return String(value || "").trim().toLocaleLowerCase("es");
 }
 
+function normalizeEmail(value, required = false) {
+  const email = String(value || "").trim().toLowerCase();
+  if (!email && !required) return "";
+  if (email.length > 190 || !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i.test(email)) {
+    throw requestError("Escribe un correo electrónico válido.");
+  }
+  return email;
+}
+
 function normalizeName(value) {
   return String(value || "").trim().replace(/\s+/g, " ");
 }
@@ -100,6 +109,9 @@ function publicUser(user) {
     firstName,
     lastName,
     username: user.username,
+    email: user.email || "",
+    loginIdentifier: user.email || user.username,
+    requiresEmailMigration: !user.email,
     currencyCode: user.currencyCode || user.currency_code || "DOP",
     phone: user.phone || "",
     onboardingCompleted,
@@ -129,7 +141,7 @@ function publicUser(user) {
 async function userWithProfile(database, userId) {
   return database.get(
     `SELECT u.id, u.name, u.first_name AS firstName, u.last_name AS lastName,
-      u.username, u.currency_code AS currencyCode, u.phone,
+      u.username, COALESCE(u.email, '') AS email, u.currency_code AS currencyCode, u.phone,
       COALESCE(p.onboarding_completed, 0) AS onboardingCompleted,
       p.age,
       COALESCE(p.income_type, '') AS incomeType,
@@ -299,6 +311,7 @@ export async function registerUser(database, payload) {
   const lastName = normalizeName(payload.lastName || String(payload.name || "").split(" ").slice(1).join(" "));
   const name = normalizeName(payload.name || `${firstName} ${lastName}`);
   const password = String(payload.password || "");
+  const email = normalizeEmail(payload.email, true);
   const requestedCurrency = normalizeCurrency(payload.currencyCode);
   const currencyCode = SUPPORTED_CURRENCIES.has(requestedCurrency) ? requestedCurrency : "DOP";
   const phone = normalizePhone(payload.phone, true);
@@ -306,6 +319,8 @@ export async function registerUser(database, payload) {
   if (firstName.length < 2) throw requestError("Escribe tu nombre.");
   if (lastName.length < 2) throw requestError("Escribe tu apellido.");
   if (password.length < 8) throw requestError("La contraseña debe tener al menos 8 caracteres.");
+  const emailExists = await database.get("SELECT id FROM users WHERE email = ?", [email]);
+  if (emailExists) throw requestError("Ese correo ya está asociado a una cuenta de Clara.", 409);
 
   const generatedUsername = await uniqueGeneratedUsername(database, firstName, lastName);
 
@@ -323,16 +338,16 @@ export async function registerUser(database, payload) {
   try {
     await database.transaction(async (transaction) => {
       const result = await transaction.run(
-        `INSERT INTO users (name, first_name, last_name, username, password_salt, password_hash, currency_code, phone)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        [name, firstName, lastName, generatedUsername, salt, hash, currencyCode, phone],
+        `INSERT INTO users (name, first_name, last_name, username, email, password_salt, password_hash, currency_code, phone)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [name, firstName, lastName, generatedUsername, email, salt, hash, currencyCode, phone],
       );
       userId = result.insertId;
       await seedUserAccounts(transaction, userId);
     });
   } catch (error) {
     if (String(error?.message || "").toLocaleLowerCase("es").includes("unique")) {
-      throw requestError("Ese nombre de usuario ya está registrado.", 409);
+      throw requestError("Ese correo o usuario ya está registrado.", 409);
     }
     throw error;
   }
@@ -343,19 +358,21 @@ export async function registerUser(database, payload) {
 }
 
 export async function loginUser(database, payload) {
-  const username = normalizeUsername(payload.username);
+  const rawIdentifier = String(payload.identifier || payload.email || payload.username || "").trim();
   const password = String(payload.password || "");
-  if (!username || !password) throw requestError("Escribe tu usuario y contraseña.");
+  if (!rawIdentifier || !password) throw requestError("Escribe tu correo y contraseña.");
 
+  const identifier = rawIdentifier.toLowerCase();
+  const usingEmail = identifier.includes("@");
   const user = await database.get(
-    `SELECT id, name, username, password_salt AS passwordSalt,
+    `SELECT id, name, username, COALESCE(email, '') AS email, password_salt AS passwordSalt,
       password_hash AS passwordHash, currency_code AS currencyCode
-     FROM users WHERE username = ?`,
-    [username],
+     FROM users WHERE ${usingEmail ? "email" : "username"} = ?`,
+    [usingEmail ? normalizeEmail(identifier, true) : normalizeUsername(identifier)],
   );
 
   if (!user || !safePasswordMatch(password, user.passwordSalt, user.passwordHash)) {
-    throw requestError("Usuario o contraseña incorrectos.", 401);
+    throw requestError("Correo o contraseña incorrectos.", 401);
   }
 
   const token = await createSession(database, Number(user.id));
@@ -433,6 +450,12 @@ export async function updateFinancialProfile(database, userId, payload) {
   if (payload.phone !== undefined) {
     const phone = normalizePhone(payload.phone, true);
     await database.run("UPDATE users SET phone = ? WHERE id = ?", [phone, userId]);
+  }
+  if (payload.email !== undefined) {
+    const email = normalizeEmail(payload.email, true);
+    const existing = await database.get("SELECT id FROM users WHERE email = ? AND id <> ?", [email, userId]);
+    if (existing) throw requestError("Ese correo ya está asociado a otra cuenta de Clara.", 409);
+    await database.run("UPDATE users SET email = ? WHERE id = ?", [email, userId]);
   }
   const merged = {
     ...current.profile,

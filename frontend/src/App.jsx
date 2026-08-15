@@ -98,10 +98,11 @@ const navItems = [
   { id: "credito", label: "Crédito y deudas", mobileLabel: "Crédito", icon: "creditCard" },
   { id: "metas", label: "Metas", icon: "target" },
   { id: "analisis", label: "Análisis", icon: "chart" },
+  { id: "sync", label: "Clara Sync", icon: "mail" },
   { id: "cuentas", label: "Cuentas", icon: "wallet" },
 ];
 const mobileNavItems = navItems.filter((item) => ["inicio", "movimientos", "presupuesto", "calendario"].includes(item.id));
-const mobileMoreItems = navItems.filter((item) => ["categorias", "credito", "metas", "analisis", "cuentas"].includes(item.id));
+const mobileMoreItems = navItems.filter((item) => ["categorias", "credito", "metas", "analisis", "sync", "cuentas"].includes(item.id));
 
 const iconPaths = {
   home: ["M3 10.5 12 3l9 7.5", "M5 9.5V21h14V9.5", "M9 21v-7h6v7"],
@@ -152,6 +153,9 @@ const iconPaths = {
   circleMore: ["M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z", "M8 12h.01", "M12 12h.01", "M16 12h.01"],
   repeat: ["M17 2l4 4-4 4", "M3 11V9a3 3 0 0 1 3-3h15", "M7 22l-4-4 4-4", "M21 13v2a3 3 0 0 1-3 3H3"],
   bell: ["M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9", "M10 21h4"],
+  mail: ["M4 5h16v14H4z", "m4 8 4 3 4-3 4 3 4-3"],
+  copy: ["M9 9h10v10H9z", "M5 15H4V5h10v1"],
+  inbox: ["M4 4h16v16H4z", "M4 14h4l2 3h4l2-3h4"],
   checkCircle: ["M22 11.1V12a10 10 0 1 1-5.9-9.1", "m9 11 3 3L22 4"],
   alertTriangle: ["M10.3 3.6 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.6a2 2 0 0 0-3.4 0Z", "M12 9v4", "M12 17h.01"],
   trendingDown: ["M3 7l6 6 4-4 8 8", "M17 17h4v-4"],
@@ -576,8 +580,8 @@ function AuthScreen({ registrationEnabled, onAuthenticated }) {
         <h2>{isRegister ? "Empieza con Clara" : "Bienvenido de nuevo"}</h2>
         <p className="auth-description">
           {isRegister
-            ? "Tu usuario se genera automáticamente y tus datos comienzan totalmente separados de los demás."
-            : "Entra a tu espacio personal para continuar organizando tu dinero."}
+            ? "Tu correo será tu usuario de acceso y tus datos comienzan totalmente separados de los demás."
+            : "Entra con tu correo. Si tienes una cuenta antigua, todavía puedes usar tu usuario anterior para migrarla."}
         </p>
 
         <form onSubmit={submit}>
@@ -587,18 +591,21 @@ function AuthScreen({ registrationEnabled, onAuthenticated }) {
           </div>}
 
           {isRegister && <label>
+            <span>Correo electrónico</span>
+            <div className="input-with-icon"><Icon name="mail" size={16} /><input type="email" name="email" autoComplete="email" required placeholder="tunombre@correo.com" /></div>
+            <small className="field-help">Este correo será tu usuario para iniciar sesión en Clara.</small>
+          </label>}
+
+          {isRegister && <label>
             <span>Número de teléfono</span>
             <div className="input-with-icon"><Icon name="phone" size={16} /><input type="tel" name="phone" autoComplete="tel" inputMode="tel" required placeholder="Ej. (809) 555-1234" /></div>
             <small className="field-help">Formará parte de tu perfil y más adelante servirá para recuperación y avisos de seguridad.</small>
           </label>}
 
-          {isRegister ? <div className="generated-user">
-            <span><Icon name="user" size={16} /> Tu usuario</span>
-            <strong>@{preview}</strong>
-            <small>Si ya existe, Clara añadirá un número automáticamente.</small>
-          </div> : <label>
-            <span>Usuario</span>
-            <input name="username" autoComplete="username" required autoFocus placeholder="Ej. egarcia" />
+          {!isRegister && <label>
+            <span>Correo electrónico</span>
+            <div className="input-with-icon"><Icon name="mail" size={16} /><input name="identifier" autoComplete="username" required autoFocus placeholder="tunombre@correo.com" /></div>
+            <small className="field-help">¿Cuenta antigua? Puedes entrar una vez con tu usuario anterior y agregar tu correo después.</small>
           </label>}
 
           {isRegister && <label>
@@ -679,7 +686,7 @@ function OnboardingWizard({ user, saving, error, onSubmit, editing = false, onCa
         <p className="eyebrow">{editing ? "Perfil financiero" : "Configuración inicial"} · {step} de 4</p>
         <h1>{stepCopy.title}</h1>
         <p>{stepCopy.text}</p>
-        <div className="onboarding-user"><span className="avatar">{initials(user.name)}</span><span><strong>{user.name}</strong><small>@{user.username} · {user.phone || "Perfil nuevo"}</small></span></div>
+        <div className="onboarding-user"><span className="avatar">{initials(user.name)}</span><span><strong>{user.name}</strong><small>{user.email || "Correo pendiente"} · {user.phone || "Perfil nuevo"}</small></span></div>
         <div className="onboarding-benefits">
           <span><Icon name="pulse" size={16} /><small>Pulso financiero Clara</small></span>
           <span><Icon name="clock" size={16} /><small>Próximo cobro estimado</small></span>
@@ -765,6 +772,8 @@ function SavingsApp() {
   const [onboardingSaving, setOnboardingSaving] = useState(false);
   const [profileWizardOpen, setProfileWizardOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [emailMigrationDismissed, setEmailMigrationDismissed] = useState(false);
+  const [notificationPromptOpen, setNotificationPromptOpen] = useState(false);
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) || "");
   const [auth, setAuth] = useState({ checking: true, registrationEnabled: true, user: null });
   const pwa = usePwaManager(token);
@@ -783,6 +792,8 @@ function SavingsApp() {
     void clearOfflineSnapshots();
     setToken("");
     setData(EMPTY_DATA);
+    setEmailMigrationDismissed(false);
+    setNotificationPromptOpen(false);
     setAuth((current) => ({ ...current, checking: false, user: null }));
   }
 
@@ -891,6 +902,8 @@ function SavingsApp() {
 
   function handleAuthenticated(session) {
     localStorage.setItem(TOKEN_KEY, session.token);
+    setEmailMigrationDismissed(false);
+    setNotificationPromptOpen(false);
     setToken(session.token);
     setAuth((current) => ({ checking: false, registrationEnabled: current.registrationEnabled, user: session.user }));
     void saveOfflineSnapshot("auth-user", session.user);
@@ -990,12 +1003,13 @@ function SavingsApp() {
     const fields = new FormData(event.currentTarget);
     const currencyCode = fields.get("currencyCode");
     const phone = fields.get("phone");
+    const email = fields.get("email");
     const firstName = fields.get("firstName");
     const lastName = fields.get("lastName");
     try {
       const { response, result } = await apiRequest("/api/settings", {
         method: "PATCH",
-        body: JSON.stringify({ currencyCode, phone, firstName, lastName }),
+        body: JSON.stringify({ currencyCode, phone, email, firstName, lastName }),
       }, token);
       if (response.status === 401) {
         clearSession();
@@ -1055,6 +1069,31 @@ function SavingsApp() {
     }
   }, [auth.user?.id, auth.user?.onboardingCompleted]);
 
+  function handleEmailMigrationUpdated(user) {
+    setAuth((current) => ({ ...current, user }));
+    void saveOfflineSnapshot("auth-user", user);
+    setEmailMigrationDismissed(false);
+    setNotice("Tu correo ya es tu usuario de acceso.");
+    window.setTimeout(() => setNotice(""), 3500);
+  }
+
+  function handleNotificationPromptResult(enabled) {
+    if (auth.user?.id) localStorage.setItem(`clara_notification_prompt_${auth.user.id}`, String(Date.now()));
+    setNotificationPromptOpen(false);
+    if (enabled) { setNotice("Notificaciones financieras activadas."); window.setTimeout(() => setNotice(""), 3500); }
+  }
+
+  useEffect(() => {
+    if (!auth.user?.id || !auth.user.onboardingCompleted || auth.user.requiresEmailMigration) return;
+    if (!pwa.mobile || !pwa.pushAvailable || pwa.pushEnabled || pwa.notificationPermission === "denied") return;
+    if (pwa.ios && !pwa.installed) return;
+    if (pwa.showInstallPrompt || pwa.showIosGuide) return;
+    const last = Number(localStorage.getItem(`clara_notification_prompt_${auth.user.id}`) || 0);
+    if (last && Date.now() - last < 7 * 24 * 60 * 60 * 1000) return;
+    const timer = window.setTimeout(() => setNotificationPromptOpen(true), 1200);
+    return () => window.clearTimeout(timer);
+  }, [auth.user?.id, auth.user?.onboardingCompleted, auth.user?.requiresEmailMigration, pwa.mobile, pwa.pushAvailable, pwa.pushEnabled, pwa.notificationPermission, pwa.installed, pwa.ios, pwa.showInstallPrompt, pwa.showIosGuide]);
+
   async function logout() {
     try {
       await apiRequest("/api/auth/logout", { method: "POST" }, token);
@@ -1072,6 +1111,7 @@ function SavingsApp() {
 
   if (auth.checking) return <><LoadingScreen />{pwaInstallUi}</>;
   if (!auth.user) return <><AuthScreen registrationEnabled={auth.registrationEnabled} onAuthenticated={handleAuthenticated} />{pwaInstallUi}</>;
+  if (auth.user.requiresEmailMigration && !emailMigrationDismissed) return <><EmailMigrationPrompt user={auth.user} token={token} onUpdated={handleEmailMigrationUpdated} onLater={() => setEmailMigrationDismissed(true)} />{pwaInstallUi}</>;
   if (!auth.user.onboardingCompleted || profileWizardOpen) return <MoneyContext.Provider value={moneyTools}><OnboardingWizard user={auth.user} saving={onboardingSaving} error={error} onSubmit={finishOnboarding} editing={profileWizardOpen && auth.user.onboardingCompleted} onCancel={auth.user.onboardingCompleted ? () => { setProfileWizardOpen(false); setError(""); } : null} />{pwaInstallUi}</MoneyContext.Provider>;
 
   return <MoneyContext.Provider value={moneyTools}>
@@ -1159,6 +1199,7 @@ function SavingsApp() {
         {activeView === "credito" && <CreditView data={data} openModal={openModal} />}
         {activeView === "metas" && <GoalsView data={data} openModal={openModal} />}
         {activeView === "analisis" && <InsightsView data={data} goTo={setActiveView} />}
+        {activeView === "sync" && <MailSyncView token={token} data={data} onFinanceRefresh={() => refresh(token)} />}
         {activeView === "cuentas" && <AccountsView data={data} openModal={openModal} showBalance={showBalance} />}
       </main>
 
@@ -1166,7 +1207,7 @@ function SavingsApp() {
         {mobileNavItems.map((item) => <button key={item.id} className={activeView === item.id ? "active" : ""} onClick={() => { setActiveView(item.id); setMobileMenuOpen(false); }}><span><Icon name={item.icon} size={22} /></span><small>{item.mobileLabel || item.label}</small></button>)}
         <button className={mobileMoreItems.some((item) => item.id === activeView) || mobileMenuOpen ? "active" : ""} onClick={() => setMobileMenuOpen((value) => !value)}><span><Icon name="circleMore" size={22} /></span><small>Más</small></button>
       </nav>
-      {mobileMenuOpen && <div className="mobile-more-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setMobileMenuOpen(false); }}><section className="mobile-more-sheet"><div className="mobile-sheet-handle"/><div className="mobile-sheet-head"><div><p className="eyebrow">Más de Clara</p><h2>Tu centro financiero</h2></div><button className="icon-button" onClick={() => setMobileMenuOpen(false)}><Icon name="close" size={18}/></button></div><div className="mobile-more-grid">{mobileMoreItems.map((item)=><button key={item.id} className={activeView===item.id?"active":""} onClick={()=>{setActiveView(item.id);setMobileMenuOpen(false);}}><span><Icon name={item.icon} size={22}/></span><div><strong>{item.label}</strong><small>{item.id==="analisis"?"Insights y predicciones":item.id==="metas"?"Metas y patrimonio":item.id==="credito"?"Tarjetas y obligaciones":item.id==="cuentas"?"Saldos e instituciones":"Tu organización"}</small></div><Icon name="chevronRight" size={16}/></button>)}</div><button className="mobile-settings-link" onClick={()=>{setMobileMenuOpen(false);setSettingsOpen(true);}}><Icon name="settings" size={20}/><span><strong>Perfil y preferencias</strong><small>Datos personales, moneda y seguridad</small></span><Icon name="chevronRight" size={16}/></button></section></div>}
+      {mobileMenuOpen && <div className="mobile-more-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setMobileMenuOpen(false); }}><section className="mobile-more-sheet"><div className="mobile-sheet-handle"/><div className="mobile-sheet-head"><div><p className="eyebrow">Más de Clara</p><h2>Tu centro financiero</h2></div><button className="icon-button" onClick={() => setMobileMenuOpen(false)}><Icon name="close" size={18}/></button></div><div className="mobile-more-grid">{mobileMoreItems.map((item)=><button key={item.id} className={activeView===item.id?"active":""} onClick={()=>{setActiveView(item.id);setMobileMenuOpen(false);}}><span><Icon name={item.icon} size={22}/></span><div><strong>{item.label}</strong><small>{item.id==="analisis"?"Insights y predicciones":item.id==="metas"?"Metas y patrimonio":item.id==="credito"?"Tarjetas y obligaciones":item.id==="sync"?"Correo financiero automático":item.id==="cuentas"?"Saldos e instituciones":"Tu organización"}</small></div><Icon name="chevronRight" size={16}/></button>)}</div><button className="mobile-settings-link" onClick={()=>{setMobileMenuOpen(false);setSettingsOpen(true);}}><Icon name="settings" size={20}/><span><strong>Perfil y preferencias</strong><small>Datos personales, moneda y seguridad</small></span><Icon name="chevronRight" size={16}/></button></section></div>}
 
       {modal && <OperationModal
         modal={modal}
@@ -1187,6 +1228,7 @@ function SavingsApp() {
         onEditProfile={() => { setSettingsOpen(false); setError(""); setProfileWizardOpen(true); }}
         pwa={pwa}
       />}
+      {notificationPromptOpen && <NotificationOptInPrompt pwa={pwa} onLater={handleNotificationPromptResult} />}
       {pwaInstallUi}
     </div>
   </MoneyContext.Provider>;
@@ -1202,6 +1244,7 @@ function viewTitle(view) {
     credito: "Entiende lo que debes y lo que tienes disponible.",
     metas: "Convierte tus planes en avances concretos.",
     analisis: "Clara interpreta tus números contigo.",
+    sync: "Automatiza tus movimientos con tus alertas bancarias.",
     cuentas: "Todo tu dinero, en orden.",
   };
   return titles[view];
@@ -2212,6 +2255,145 @@ function OperationModal({ modal, data, saving, error, user, onClose, onSubmit })
   </div>;
 }
 
+function MailSyncView({ token, data, onFinanceRefresh }) {
+  const { moneyFor } = useMoney();
+  const [state, setState] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  async function load() {
+    setLoading(true);
+    try {
+      const { response, result } = await apiRequest("/api/mail-sync", { cache: "no-store" }, token);
+      if (!response.ok || !result?.mailSync) throw new Error(result?.error || "No se pudo cargar Clara Mail Sync.");
+      setState(result.mailSync);
+      setError("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudo cargar Clara Mail Sync.");
+    } finally { setLoading(false); }
+  }
+
+  useEffect(() => { void load(); }, [token]);
+
+  async function updateSettings(autoMode, enabled = true) {
+    setSaving(true); setError("");
+    try {
+      const { response, result } = await apiRequest("/api/mail-sync", { method: "PATCH", body: JSON.stringify({ autoMode, enabled }) }, token);
+      if (!response.ok || !result?.mailSync) throw new Error(result?.error || "No se pudo actualizar Mail Sync.");
+      setState(result.mailSync);
+      setMessage("Preferencias de Mail Sync actualizadas.");
+    } catch (err) { setError(err.message || "No se pudo actualizar Mail Sync."); }
+    finally { setSaving(false); }
+  }
+
+  async function addSource(event) {
+    event.preventDefault(); setSaving(true); setError(""); setMessage("");
+    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+    try {
+      const { response, result } = await apiRequest("/api/mail-sync/sources", { method: "POST", body: JSON.stringify(payload) }, token);
+      if (!response.ok || !result?.mailSync) throw new Error(result?.error || "No se pudo agregar la institución.");
+      setState(result.mailSync); event.currentTarget.reset(); setMessage("Institución conectada a Clara Mail Sync.");
+    } catch (err) { setError(err.message || "No se pudo agregar la institución."); }
+    finally { setSaving(false); }
+  }
+
+  async function removeSource(id) {
+    if (!window.confirm("¿Quitar esta fuente de Mail Sync? Los movimientos ya registrados no se borrarán.")) return;
+    setSaving(true);
+    try {
+      const { response, result } = await apiRequest(`/api/mail-sync/sources/${id}`, { method: "DELETE" }, token);
+      if (!response.ok || !result?.mailSync) throw new Error(result?.error || "No se pudo quitar la fuente.");
+      setState(result.mailSync);
+    } catch (err) { setError(err.message || "No se pudo quitar la fuente."); }
+    finally { setSaving(false); }
+  }
+
+  async function confirmDetected(event, id) {
+    event.preventDefault(); setSaving(true); setError("");
+    const payload = Object.fromEntries(new FormData(event.currentTarget).entries());
+    try {
+      const { response, result } = await apiRequest(`/api/mail-sync/messages/${id}/confirm`, { method: "POST", body: JSON.stringify(payload) }, token);
+      if (!response.ok || !result?.mailSync) throw new Error(result?.error || "No se pudo registrar el movimiento detectado.");
+      setState(result.mailSync); setMessage("Movimiento confirmado y registrado.");
+      await onFinanceRefresh?.();
+    } catch (err) { setError(err.message || "No se pudo registrar el movimiento detectado."); }
+    finally { setSaving(false); }
+  }
+
+  async function ignoreDetected(id) {
+    setSaving(true);
+    try {
+      const { response, result } = await apiRequest(`/api/mail-sync/messages/${id}/ignore`, { method: "POST", body: "{}" }, token);
+      if (!response.ok || !result?.mailSync) throw new Error(result?.error || "No se pudo ignorar el mensaje.");
+      setState(result.mailSync);
+    } catch (err) { setError(err.message || "No se pudo ignorar el mensaje."); }
+    finally { setSaving(false); }
+  }
+
+  async function copyAddress() {
+    if (!state?.forwardingAddress) return;
+    await navigator.clipboard.writeText(state.forwardingAddress);
+    setMessage("Dirección de Clara Mail copiada.");
+  }
+
+  if (loading && !state) return <section className="view-card mail-sync-loading"><span className="spinner"/><strong>Preparando Clara Sync…</strong></section>;
+  const pending = state?.messages?.filter((item) => item.status === "review") || [];
+  const history = state?.messages?.filter((item) => item.status !== "review") || [];
+  const cashAccounts = data.accounts.filter((account) => account.kind === "cash");
+
+  return <div className="mail-sync-view page-stack">
+    <section className="mail-sync-hero">
+      <div><p className="eyebrow">Clara Mail Sync</p><h2>Tus alertas bancarias, convertidas en movimientos.</h2><p>Reenvía únicamente las notificaciones que te envía tu banco. Clara extrae monto, tipo y referencia sin necesitar tu contraseña bancaria ni acceso completo a tu correo.</p></div>
+      <div className="sync-hero-actions"><span className={state?.enabled ? "sync-status active" : "sync-status"}><i/>{state?.enabled ? "Activo" : "Pausado"}</span><button type="button" className="sync-pause-button" onClick={() => void updateSettings(state?.autoMode || "review", !state?.enabled)} disabled={saving}>{state?.enabled ? "Pausar" : "Activar"}</button></div>
+    </section>
+
+    {!state?.configured && <div className="inline-alert mail-config-alert"><span><strong>Falta configurar el buzón receptor.</strong> En Render agrega MAIL_SYNC_INBOX_ADDRESS y MAIL_SYNC_SECRET para recibir correos desde n8n.</span></div>}
+
+    <section className="mail-sync-grid">
+      <article className="view-card forwarding-card">
+        <div className="card-icon"><Icon name="mail" size={21}/></div><p className="eyebrow">Tu dirección privada</p><h3>Reenvía aquí las alertas del banco</h3>
+        {state?.forwardingAddress ? <><div className="forwarding-address"><code>{state.forwardingAddress}</code><button type="button" onClick={copyAddress}><Icon name="copy" size={16}/>Copiar</button></div><p className="muted">Configura una regla en Gmail/Outlook para reenviar solo los mensajes de tus bancos a esta dirección.</p></> : <p className="empty-copy">El administrador de Clara debe configurar primero el buzón receptor en Render.</p>}
+      </article>
+      <article className="view-card sync-mode-card"><div className="card-icon"><Icon name="shield" size={21}/></div><p className="eyebrow">Nivel de automatización</p><h3>Decide cuánto puede hacer Clara sola</h3><label className="sync-radio"><input type="radio" checked={state?.autoMode !== "automatic_high"} onChange={() => void updateSettings("review", true)} disabled={saving}/><span><strong>Revisar antes de registrar</strong><small>Recomendado mientras Clara aprende tus notificaciones.</small></span></label><label className="sync-radio"><input type="radio" checked={state?.autoMode === "automatic_high"} onChange={() => void updateSettings("automatic_high", true)} disabled={saving}/><span><strong>Automático con alta confianza</strong><small>Solo registra cuando institución, cuenta, monto y tipo coinciden con suficiente seguridad.</small></span></label></article>
+    </section>
+
+    <section className="view-card sync-source-section">
+      <div className="section-heading"><div><p className="eyebrow">Instituciones reconocidas</p><h3>Indica qué correo pertenece a cada cuenta</h3><p>Esto evita que un correo cualquiera pueda modificar tus saldos.</p></div></div>
+      <form className="sync-source-form" onSubmit={addSource}>
+        <label><span>Banco o institución</span><input name="institutionName" required placeholder="Ej. Banreservas"/></label>
+        <label><span>Correo que envía las alertas</span><input type="email" name="senderMatch" required placeholder="alertas@banco.com"/></label>
+        <label><span>Cuenta correspondiente</span><select name="accountId" required defaultValue=""><option value="" disabled>Selecciona una cuenta</option>{data.accounts.map((account)=><option key={account.id} value={account.id}>{account.name} · {account.currencyCode}</option>)}</select></label>
+        <label><span>Últimos 4 dígitos (opcional)</span><input name="maskedRef" inputMode="numeric" maxLength="4" placeholder="4132"/></label>
+        <label><span>Categoría predeterminada (opcional)</span><select name="defaultCategoryId" defaultValue=""><option value="">Preguntarme</option>{data.categories.filter((cat)=>!cat.parentId).map((cat)=><option key={cat.id} value={cat.id}>{cat.displayName || cat.name}</option>)}</select></label>
+        <button className="primary-action sync-add-source" disabled={saving}><Icon name="plus" size={16}/>Agregar fuente</button>
+      </form>
+      <div className="sync-source-list">{state?.sources?.length ? state.sources.map((source)=><div className="sync-source-item" key={source.id}><span className="source-mark"><Icon name="mail" size={18}/></span><div><strong>{source.institutionName}</strong><small>{source.senderMatch} · {source.accountName}{source.maskedRef ? ` · ••••${source.maskedRef}` : ""}</small></div><button className="icon-button danger-soft" onClick={()=>void removeSource(source.id)} aria-label="Eliminar fuente"><Icon name="trash" size={16}/></button></div>) : <div className="empty-inline"><Icon name="inbox" size={20}/><span><strong>Aún no has agregado bancos.</strong><small>Agrega el remitente exacto de una notificación bancaria real.</small></span></div>}</div>
+    </section>
+
+    <section className="view-card detected-section">
+      <div className="section-heading"><div><p className="eyebrow">Bandeja financiera</p><h3>{pending.length ? `${pending.length} movimiento${pending.length===1?"":"s"} por revisar` : "Todo está al día"}</h3></div><span className="sync-count">{state?.stats?.registered || 0} registrados</span></div>
+      {pending.length ? <div className="detected-list">{pending.map((item)=><form className="detected-card" key={item.id} onSubmit={(event)=>void confirmDetected(event,item.id)}><div className="detected-top"><span className="source-mark"><Icon name="mail" size={18}/></span><div><strong>{item.institutionName || item.sender || "Correo detectado"}</strong><small>{new Date(item.receivedAt).toLocaleString("es-DO")} · Confianza {item.confidence}%</small></div><b>{moneyFor(item.amount,item.currencyCode)}</b></div><p>{item.merchant || item.subject || "Movimiento bancario detectado"}</p>{item.reportedBalance > 0 && <small className="reported-balance"><Icon name="wallet" size={13}/> Saldo informado por el banco: {moneyFor(item.reportedBalance,item.currencyCode)}</small>}<div className="detected-fields"><select name="movementType" defaultValue={["income","expense","withdrawal"].includes(item.movementType)?item.movementType:"expense"}><option value="expense">Gasto</option><option value="income">Ingreso</option><option value="withdrawal">Retiro a efectivo</option></select><select name="accountId" defaultValue={item.accountId || ""} required><option value="" disabled>Cuenta de origen</option>{data.accounts.map((account)=><option value={account.id} key={account.id}>{account.name}</option>)}</select><select name="categoryId" defaultValue={item.defaultCategoryId || ""}><option value="">Categoría si es gasto</option>{data.categories.map((cat)=><option value={cat.id} key={cat.id}>{cat.parentName ? `${cat.parentName} · `:""}{cat.displayName||cat.name}</option>)}</select><select name="destinationAccountId" defaultValue=""><option value="">Efectivo si fue retiro</option>{cashAccounts.map((account)=><option key={account.id} value={account.id}>{account.name}</option>)}</select></div><div className="detected-actions"><button type="button" className="secondary-action" onClick={()=>void ignoreDetected(item.id)}>Ignorar</button><button className="primary-action" disabled={saving}>Confirmar y registrar</button></div></form>)}</div> : <div className="empty-state compact"><span><Icon name="check" size={21}/></span><div><strong>No tienes alertas pendientes.</strong><p>Cuando n8n reenvíe una notificación bancaria, aparecerá aquí si necesita tu confirmación.</p></div></div>}
+    </section>
+
+    {history.length > 0 && <section className="view-card sync-history"><p className="eyebrow">Actividad reciente</p><div>{history.slice(0,12).map((item)=><div className="sync-history-row" key={item.id}><span className={item.status==="registered"?"history-state registered":"history-state"}><Icon name={item.status==="registered"?"check":"close"} size={14}/></span><div><strong>{item.merchant || item.subject || item.institutionName || "Notificación bancaria"}</strong><small>{item.status === "registered" ? "Registrado en Clara" : "Ignorado"} · {item.sender}</small></div><b>{item.amount ? moneyFor(item.amount,item.currencyCode) : "—"}</b></div>)}</div></section>}
+    {error && <p className="form-error" role="alert">{error}</p>}{message && <p className="success-note"><Icon name="check" size={15}/>{message}</p>}
+  </div>;
+}
+
+function EmailMigrationPrompt({ user, token, onUpdated, onLater }) {
+  const [email, setEmail] = useState(""); const [saving, setSaving] = useState(false); const [error, setError] = useState("");
+  async function submit(event) { event.preventDefault(); setSaving(true); setError(""); try { const {response,result}=await apiRequest("/api/settings",{method:"PATCH",body:JSON.stringify({email})},token); if(!response.ok||!result?.user) throw new Error(result?.error||"No se pudo agregar tu correo."); onUpdated(result.user); } catch(err){setError(err.message||"No se pudo agregar tu correo.");} finally{setSaving(false);} }
+  return <div className="pwa-install-backdrop account-migration-backdrop"><section className="account-migration-card" role="dialog" aria-modal="true"><span className="migration-icon"><Icon name="mail" size={24}/></span><p className="eyebrow">Actualización de acceso</p><h2>Tu correo será tu nuevo usuario de Clara.</h2><p>Tu cuenta fue creada antes de este cambio. Agrega tu correo y desde ahora iniciarás sesión con él. Nada de tus cuentas, movimientos o metas se modifica.</p><div className="legacy-user-line"><small>Usuario anterior</small><strong>@{user.username}</strong></div><form onSubmit={submit}><label><span>Correo electrónico</span><div className="input-with-icon"><Icon name="mail" size={16}/><input type="email" required autoFocus value={email} onChange={(e)=>setEmail(e.target.value)} placeholder="tunombre@correo.com"/></div></label>{error&&<p className="form-error">{error}</p>}<div className="modal-actions"><button type="button" className="secondary-action" onClick={onLater}>Más tarde</button><button className="primary-action" disabled={saving}>{saving?"Guardando…":"Usar este correo"}</button></div></form><small className="migration-foot">Mientras no lo agregues, podrás seguir entrando temporalmente con tu usuario anterior.</small></section></div>;
+}
+
+function NotificationOptInPrompt({ pwa, onLater }) {
+  const [error,setError]=useState("");
+  async function activate(){setError("");try{await pwa.enableNotifications();onLater(true);}catch(err){setError(err.message||"No se pudieron activar las notificaciones.");}}
+  return <div className="pwa-install-backdrop notification-optin-backdrop"><section className="notification-optin-card" role="dialog" aria-modal="true"><span className="notification-optin-icon"><Icon name="bell" size={24}/></span><p className="eyebrow">Recordatorios de Clara</p><h2>¿Quieres recibir notificaciones financieras?</h2><p>Clara puede avisarte cuando se acerque un pago, una cuota, el corte de una tarjeta o una meta importante. Puedes desactivarlas cuando quieras.</p><div className="notification-benefits"><span><Icon name="calendar" size={17}/><strong>Pagos y vencimientos</strong></span><span><Icon name="creditCard" size={17}/><strong>Tarjetas y deudas</strong></span><span><Icon name="target" size={17}/><strong>Metas importantes</strong></span></div>{error&&<p className="form-error">{error}</p>}<div className="modal-actions"><button className="secondary-action" onClick={()=>onLater(false)}>Ahora no</button><button className="primary-action" onClick={()=>void activate()} disabled={pwa.busy}><Icon name="bell" size={16}/>{pwa.busy?"Activando…":"Sí, avisarme"}</button></div></section></div>;
+}
+
 function SettingsModal({ user, saving, error, onClose, onSubmit, onLogout, onEditProfile, pwa }) {
   return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => {
     if (event.target === event.currentTarget) onClose();
@@ -2222,18 +2404,14 @@ function SettingsModal({ user, saving, error, onClose, onSubmit, onLogout, onEdi
       <h2 id="settings-title">Tu cuenta</h2>
       <div className="settings-user">
         <span className="avatar settings-avatar">{initials(user.name)}</span>
-        <span><strong>{user.name}</strong><small>@{user.username}</small></span>
+        <span><strong>{user.name}</strong><small>{user.email || "Agrega tu correo de acceso"}</small></span>
       </div>
       <form onSubmit={onSubmit}>
         <div className="form-grid">
           <label><span>Nombre</span><input name="firstName" autoComplete="given-name" required defaultValue={user.firstName || user.name?.split(" ")[0] || ""} /></label>
           <label><span>Apellido</span><input name="lastName" autoComplete="family-name" required defaultValue={user.lastName || user.name?.split(" ").slice(1).join(" ") || ""} /></label>
         </div>
-        <div className="generated-user settings-generated-user">
-          <span><Icon name="user" size={16} /> Usuario de acceso</span>
-          <strong>@{user.username}</strong>
-          <small>Tu usuario se genera al registrarte y no cambia cuando editas tu nombre.</small>
-        </div>
+        <label><span>Correo de acceso</span><div className="input-with-icon"><Icon name="mail" size={16} /><input type="email" name="email" autoComplete="email" required defaultValue={user.email || ""} placeholder="tunombre@correo.com" /></div><small className="field-help">Este es el usuario que usarás para iniciar sesión en Clara.</small></label>
         <label><span>Teléfono del perfil</span><div className="input-with-icon"><Icon name="phone" size={16} /><input type="tel" name="phone" autoComplete="tel" inputMode="tel" required defaultValue={user.phone || ""} placeholder="Ej. (809) 555-1234" /></div></label>
         <label><span>Moneda del sistema</span>
           <select name="currencyCode" defaultValue={user.currencyCode || "DOP"}>

@@ -40,6 +40,7 @@ function ensureSqliteMultiUserSchema(database) {
     ["users", "first_name", "TEXT NOT NULL DEFAULT ''"],
     ["users", "last_name", "TEXT NOT NULL DEFAULT ''"],
     ["users", "phone", "TEXT NOT NULL DEFAULT ''"],
+    ["users", "email", "TEXT NULL"],
     ["accounts", "user_id", "INTEGER"],
     ["accounts", "institution_type", "TEXT NOT NULL DEFAULT 'other'"],
     ["accounts", "institution_name", "TEXT NOT NULL DEFAULT ''"],
@@ -152,6 +153,46 @@ function ensureSqliteMultiUserSchema(database) {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(user_id, snapshot_date, primary_currency)
     );
+    CREATE TABLE IF NOT EXISTS mail_sync_connections (
+      user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      sync_token TEXT NOT NULL UNIQUE,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      auto_mode TEXT NOT NULL DEFAULT 'review',
+      last_received_at TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS mail_sync_sources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      institution_name TEXT NOT NULL,
+      sender_match TEXT NOT NULL,
+      account_id INTEGER NOT NULL REFERENCES accounts(id),
+      masked_ref TEXT NOT NULL DEFAULT '',
+      default_category_id INTEGER REFERENCES categories(id),
+      is_active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS mail_sync_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      source_id INTEGER REFERENCES mail_sync_sources(id) ON DELETE SET NULL,
+      message_hash TEXT NOT NULL UNIQUE,
+      sender TEXT NOT NULL DEFAULT '',
+      subject TEXT NOT NULL DEFAULT '',
+      received_at TEXT NOT NULL,
+      movement_type TEXT NOT NULL DEFAULT 'unknown',
+      amount INTEGER NOT NULL DEFAULT 0, reported_balance INTEGER NOT NULL DEFAULT 0,
+      currency_code TEXT NOT NULL DEFAULT 'DOP',
+      merchant TEXT NOT NULL DEFAULT '',
+      reference TEXT NOT NULL DEFAULT '',
+      masked_ref TEXT NOT NULL DEFAULT '',
+      confidence INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'review',
+      transaction_id INTEGER REFERENCES transactions(id) ON DELETE SET NULL,
+      excerpt TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
     CREATE TABLE IF NOT EXISTS account_balance_adjustments (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -178,6 +219,9 @@ function ensureSqliteMultiUserSchema(database) {
     CREATE INDEX IF NOT EXISTS idx_adjustments_user_account ON account_balance_adjustments(user_id, account_id);
     CREATE INDEX IF NOT EXISTS idx_categories_user_active ON categories(user_id, is_active);
     CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email);
+    CREATE INDEX IF NOT EXISTS idx_mail_sync_sources_user ON mail_sync_sources(user_id, is_active);
+    CREATE INDEX IF NOT EXISTS idx_mail_sync_messages_user_status ON mail_sync_messages(user_id, status, received_at);
   `);
 
   database.exec(`
@@ -355,6 +399,7 @@ async function ensureTidbMultiUserSchema(connection) {
     ["users", "first_name", "VARCHAR(60) NOT NULL DEFAULT ''"],
     ["users", "last_name", "VARCHAR(80) NOT NULL DEFAULT ''"],
     ["users", "phone", "VARCHAR(30) NOT NULL DEFAULT ''"],
+    ["users", "email", "VARCHAR(190) NULL"],
     ["accounts", "user_id", "BIGINT NULL"],
     ["accounts", "institution_type", "VARCHAR(30) NOT NULL DEFAULT 'other'"],
     ["accounts", "institution_name", "VARCHAR(150) NOT NULL DEFAULT ''"],
@@ -477,6 +522,34 @@ async function ensureTidbMultiUserSchema(connection) {
     CONSTRAINT fk_financial_snapshots_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   )`);
 
+  await connection.query(`CREATE TABLE IF NOT EXISTS mail_sync_connections (
+    user_id BIGINT PRIMARY KEY, sync_token VARCHAR(80) NOT NULL UNIQUE, is_enabled TINYINT(1) NOT NULL DEFAULT 1,
+    auto_mode VARCHAR(30) NOT NULL DEFAULT 'review', last_received_at DATETIME NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_mail_sync_connections_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  )`);
+
+  await connection.query(`CREATE TABLE IF NOT EXISTS mail_sync_sources (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL, institution_name VARCHAR(160) NOT NULL, sender_match VARCHAR(190) NOT NULL,
+    account_id BIGINT NOT NULL, masked_ref VARCHAR(20) NOT NULL DEFAULT '', default_category_id BIGINT NULL, is_active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_mail_sync_sources_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_mail_sync_sources_account FOREIGN KEY (account_id) REFERENCES accounts(id),
+    CONSTRAINT fk_mail_sync_sources_category FOREIGN KEY (default_category_id) REFERENCES categories(id)
+  )`);
+
+  await connection.query(`CREATE TABLE IF NOT EXISTS mail_sync_messages (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT, user_id BIGINT NOT NULL, source_id BIGINT NULL, message_hash CHAR(64) NOT NULL UNIQUE,
+    sender VARCHAR(255) NOT NULL DEFAULT '', subject VARCHAR(500) NOT NULL DEFAULT '', received_at DATETIME NOT NULL,
+    movement_type VARCHAR(30) NOT NULL DEFAULT 'unknown', amount BIGINT NOT NULL DEFAULT 0, reported_balance BIGINT NOT NULL DEFAULT 0, currency_code VARCHAR(10) NOT NULL DEFAULT 'DOP',
+    merchant VARCHAR(255) NOT NULL DEFAULT '', reference VARCHAR(160) NOT NULL DEFAULT '', masked_ref VARCHAR(20) NOT NULL DEFAULT '',
+    confidence INT NOT NULL DEFAULT 0, status VARCHAR(30) NOT NULL DEFAULT 'review', transaction_id BIGINT NULL, excerpt VARCHAR(1200) NOT NULL DEFAULT '',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_mail_sync_messages_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_mail_sync_messages_source FOREIGN KEY (source_id) REFERENCES mail_sync_sources(id) ON DELETE SET NULL,
+    CONSTRAINT fk_mail_sync_messages_transaction FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL
+  )`);
+
   await connection.query(`CREATE TABLE IF NOT EXISTS account_balance_adjustments (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     user_id BIGINT NOT NULL,
@@ -541,6 +614,9 @@ async function ensureTidbMultiUserSchema(connection) {
     "CREATE INDEX IF NOT EXISTS idx_adjustments_user_account ON account_balance_adjustments(user_id, account_id)",
     "CREATE INDEX IF NOT EXISTS idx_categories_user_active ON categories(user_id, is_active)",
     "CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories(parent_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email)",
+    "CREATE INDEX IF NOT EXISTS idx_mail_sync_sources_user ON mail_sync_sources(user_id, is_active)",
+    "CREATE INDEX IF NOT EXISTS idx_mail_sync_messages_user_status ON mail_sync_messages(user_id, status, received_at)",
   ];
   for (const statement of indexes) await connection.query(statement);
 }

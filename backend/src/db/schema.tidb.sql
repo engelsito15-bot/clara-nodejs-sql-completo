@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS users (
   first_name VARCHAR(60) NOT NULL DEFAULT '',
   last_name VARCHAR(80) NOT NULL DEFAULT '',
   username VARCHAR(40) NOT NULL UNIQUE,
+  email VARCHAR(190) NULL,
   password_salt VARCHAR(64) NOT NULL,
   password_hash VARCHAR(256) NOT NULL,
   currency_code VARCHAR(10) NOT NULL DEFAULT 'DOP',
@@ -69,6 +70,7 @@ CREATE TABLE IF NOT EXISTS notification_log (
   UNIQUE KEY uq_notification_log_user_key_date (user_id, reminder_key, sent_on),
   CONSTRAINT fk_notification_log_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
 
 CREATE TABLE IF NOT EXISTS accounts (
   id BIGINT PRIMARY KEY AUTO_INCREMENT,
@@ -342,6 +344,58 @@ CREATE TABLE IF NOT EXISTS financial_snapshots (
   CONSTRAINT fk_financial_snapshots_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS mail_sync_connections (
+  user_id BIGINT PRIMARY KEY,
+  sync_token VARCHAR(80) NOT NULL UNIQUE,
+  is_enabled TINYINT(1) NOT NULL DEFAULT 1,
+  auto_mode VARCHAR(30) NOT NULL DEFAULT 'review',
+  last_received_at DATETIME NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT fk_mail_sync_connections_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS mail_sync_sources (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  institution_name VARCHAR(160) NOT NULL,
+  sender_match VARCHAR(190) NOT NULL,
+  account_id BIGINT NOT NULL,
+  masked_ref VARCHAR(20) NOT NULL DEFAULT '',
+  default_category_id BIGINT NULL,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_mail_sync_sources_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_mail_sync_sources_account FOREIGN KEY (account_id) REFERENCES accounts(id),
+  CONSTRAINT fk_mail_sync_sources_category FOREIGN KEY (default_category_id) REFERENCES categories(id)
+);
+
+CREATE TABLE IF NOT EXISTS mail_sync_messages (
+  id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  user_id BIGINT NOT NULL,
+  source_id BIGINT NULL,
+  message_hash CHAR(64) NOT NULL UNIQUE,
+  sender VARCHAR(255) NOT NULL DEFAULT '',
+  subject VARCHAR(500) NOT NULL DEFAULT '',
+  received_at DATETIME NOT NULL,
+  movement_type VARCHAR(30) NOT NULL DEFAULT 'unknown',
+  amount BIGINT NOT NULL DEFAULT 0,
+  reported_balance BIGINT NOT NULL DEFAULT 0,
+  currency_code VARCHAR(10) NOT NULL DEFAULT 'DOP',
+  merchant VARCHAR(255) NOT NULL DEFAULT '',
+  reference VARCHAR(160) NOT NULL DEFAULT '',
+  masked_ref VARCHAR(20) NOT NULL DEFAULT '',
+  confidence INT NOT NULL DEFAULT 0,
+  status VARCHAR(30) NOT NULL DEFAULT 'review',
+  transaction_id BIGINT NULL,
+  excerpt VARCHAR(1200) NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_mail_sync_messages_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_mail_sync_messages_source FOREIGN KEY (source_id) REFERENCES mail_sync_sources(id) ON DELETE SET NULL,
+  CONSTRAINT fk_mail_sync_messages_transaction FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL
+);
+
+
 CREATE TABLE IF NOT EXISTS app_meta (
   `key` VARCHAR(100) PRIMARY KEY,
   value TEXT NOT NULL
@@ -354,6 +408,8 @@ CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(use
 CREATE INDEX IF NOT EXISTS idx_notification_log_user_date ON notification_log(user_id, sent_on);
 CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expiration ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_mail_sync_sources_user ON mail_sync_sources(user_id, is_active);
+CREATE INDEX IF NOT EXISTS idx_mail_sync_messages_user_status ON mail_sync_messages(user_id, status, received_at);
 
 CREATE INDEX IF NOT EXISTS idx_recurring_user_due ON recurring_payments(user_id, is_active, next_due_date);
 

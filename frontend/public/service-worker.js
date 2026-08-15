@@ -1,4 +1,4 @@
-const CACHE_NAME = "clara-shell-v3.6";
+const CACHE_NAME = "clara-shell-v3.7";
 const QUEUE_DB = "clara-offline-queue";
 const QUEUE_STORE = "requests";
 const APP_SHELL = [
