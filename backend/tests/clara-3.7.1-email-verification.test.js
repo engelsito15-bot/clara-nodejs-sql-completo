@@ -20,19 +20,24 @@ async function close(ctx) {
 test("envía código de 6 dígitos y verifica el correo", async () => {
   const ctx = tempDb();
   const oldFetch = global.fetch;
-  const oldKey = process.env.RESEND_API_KEY;
-  const oldFrom = process.env.EMAIL_FROM;
+  const oldKey = process.env.BREVO_API_KEY;
+  const oldSenderEmail = process.env.BREVO_SENDER_EMAIL;
+  const oldSenderName = process.env.BREVO_SENDER_NAME;
   let sentBody = null;
-  process.env.RESEND_API_KEY = "re_test";
-  process.env.EMAIL_FROM = "Clara <acceso@example.com>";
+  process.env.BREVO_API_KEY = "xkeysib-test";
+  process.env.BREVO_SENDER_EMAIL = "acceso@example.com";
+  process.env.BREVO_SENDER_NAME = "Clara";
   global.fetch = async (_url, options) => {
     sentBody = JSON.parse(options.body);
-    return new Response(JSON.stringify({ id: "email_test" }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ messageId: "<email_test@brevo>" }), { status: 201, headers: { "content-type": "application/json" } });
   };
   try {
     const created = await registerUser(ctx.db, { firstName: "Ana", lastName: "Perez", email: "ana@example.com", phone: "8095551234", password: "12345678" });
     assert.equal(created.user.emailVerified, false);
     await sendEmailVerificationCode(ctx.db, created.user.id, { force: true });
+    assert.equal(sentBody.sender.email, "acceso@example.com");
+    assert.equal(sentBody.sender.name, "Clara");
+    assert.equal(sentBody.to[0].email, "ana@example.com");
     const match = sentBody.subject.match(/^(\d{6})/);
     assert.ok(match);
     await verifyEmailCode(ctx.db, created.user.id, match[1]);
@@ -40,8 +45,9 @@ test("envía código de 6 dígitos y verifica el correo", async () => {
     assert.ok(row.verifiedAt);
   } finally {
     global.fetch = oldFetch;
-    process.env.RESEND_API_KEY = oldKey;
-    process.env.EMAIL_FROM = oldFrom;
+    process.env.BREVO_API_KEY = oldKey;
+    process.env.BREVO_SENDER_EMAIL = oldSenderEmail;
+    process.env.BREVO_SENDER_NAME = oldSenderName;
     await close(ctx);
   }
 });
